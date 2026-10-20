@@ -1,0 +1,13 @@
+PASS: joint admission, concurrency, pinned leases, replacement eviction, identity,
+prefix-only checkpoints, token caps, stop strings, EOS, cached logits, cancellation, checkpoint boundaries
+Packed layer 0: 8 experts, 6144 bytes/expert
+.Packed layer 0: 8 experts, 6144 bytes/expert
+.Packed layer 0: 8 experts, 6144 bytes/expert
+.Packed layer 0: 8 experts, 6144 bytes/expert
+.Packed layer 0: 8 experts, 6144 bytes/expert
+.Packed layer 0: 8 experts, 6144 bytes/expert
+.
+----------------------------------------------------------------------
+Ran 6 tests in 0.120s
+
+OK

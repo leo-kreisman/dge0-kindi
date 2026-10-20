@@ -1,10 +1,37 @@
 """Synthetic timing checks only; these do not measure model performance."""
 import unittest
 
-from verify_mac import timing_metrics
+from verify_mac import timing_metrics, check_modes, GIB
+import copy
 
 
 class TimingTests(unittest.TestCase):
+    def run_fixture(self):
+        rows=[]
+        for case,cached in zip(['initial','repeat','edited_tail','changed_prefix'],[0,2000,2000,0]):
+            rows.append({'case':case,'tokens':[1,2], 'stats':{
+                'prefix_cache':{'last_cached_tokens':cached},
+                'memory':{'resident_peak_bytes':GIB,'footprint_bytes':GIB},
+                'joint_budget':{'managed_peak_bytes':100,'managed_limit_bytes':200},
+                'expert_io':{'packed_read_calls':1}}})
+        return {mode:{'rows':copy.deepcopy(rows)} for mode in ('baseline','io','cached','packed')}
+
+    def test_comparison_rejects_missing_rows(self):
+        run=self.run_fixture()
+        self.assertTrue(all(check_modes(run).values()))
+        run['io']['rows'].pop()
+        self.assertFalse(all(check_modes(run).values()))
+
+    def test_comparison_requires_parity_memory_and_packed_use(self):
+        for mutate in [
+            lambda r:r['io']['rows'][0].update(tokens=[9]),
+            lambda r:r['cached']['rows'][0]['stats']['memory'].update(footprint_bytes=0),
+            lambda r:r['packed']['rows'][0]['stats']['memory'].update(footprint_bytes=9*GIB),
+            lambda r:[x['stats']['expert_io'].update(packed_read_calls=0) for x in r['packed']['rows']],
+        ]:
+            run=self.run_fixture(); mutate(run)
+            self.assertFalse(all(check_modes(run).values()))
+
     def test_prefill_and_terminal_cleanup_excluded_from_decode(self):
         result = timing_metrics(10, [20, 20.5, 21], 22)
         self.assertEqual(result['decode_tokens_per_second'], 2)

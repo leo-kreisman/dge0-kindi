@@ -41,6 +41,11 @@ int main() {
     auto retained=a; a.reset(); assert(b.metrics().live==80);
     retained.reset(); assert(b.metrics().live==0);
     assert(!b.acquire(UINT64_MAX));
+    std::atomic<int> evictions{0};
+    b.add_evictor([&] { ++evictions; return false; });
+    auto occupied=b.try_acquire(90); assert(occupied);
+    assert(!b.try_acquire(11)); assert(evictions==0);
+    occupied.reset();
     std::atomic<int> successes{0};
     std::vector<std::thread> workers;
     for(int i=0;i<4;++i) workers.emplace_back([&]{

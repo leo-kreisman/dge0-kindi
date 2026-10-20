@@ -2,7 +2,7 @@ Experimental Edge0 + Kindi-inspired runtime integration.
 Edge0 upstream: https://github.com/Edge0-AI/Edge0
 Base revision: 85b2a03b2a05f66a6526ff904e820dfb3509a7d9
 Upstream Apache-2.0 license retained in LICENSE.
-Modifications: shared budget admission, prefix checkpoints, cache/stream fixes, memory telemetry and verification tools (2026-10-20).
+Modifications: shared budget admission, prefix checkpoints, cache/stream fixes, memory telemetry, optional packed expert reads, batched materialization, prefill overlap and verification tools (2026-10-20).
 Kindi design reference: https://github.com/ahtx/kindi
 No Kindi model weights or CUDA implementation are included.
 Unofficial experimental integration; no upstream endorsement claimed.

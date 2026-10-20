@@ -22,6 +22,27 @@ the MoE model with Bonsai.
 
 ## Changes
 
+The v0.2 experiment adds:
+
+* Optional **expert-major sidecars**: each expert's nine unchanged U32/BF16
+  regions become one contiguous `pread` request. Payloads have CRC32 checks;
+  source sizes, timestamps, tensor offsets and lengths must match. Routing,
+  expert count and quantization stay unchanged. This uses a temporary CPU buffer
+  and existing MLX constructors, not a new direct-to-Metal allocator. Both staging
+  and final bundles reserve space in the joint budget. Packed loading is opt-in.
+* Batch materialization waits once per group instead of once per expert.
+  Incremental staging consumes prefetched/in-flight bundles instead of rebuilding
+  them. Expert requests are deduplicated.
+* Speculative loads use free managed space only; they cannot evict useful demand
+  data or prefix checkpoints. Required loads retry refused prefetches. Eviction
+  reclaims expert caches before expensive prefix snapshots.
+* Optional 35B prefill overlap starts resident-expert GPU work while the host reads
+  cold experts. Every eight cold experts, it evaluates the accumulated graph to
+  bound retained storage and check memory pressure. Accumulation order is retained;
+  target-Mac numerical validation is still required. Disabled by default.
+* Per-request I/O/materialization counters and alternating-order comparison modes.
+  These counters measure engine-requested bytes, not physical SSD traffic.
+
 * One thread-safe **2 GiB managed payload pool** admits expert bundles and prefix
   snapshots before their allocations. In-flight bundles hold reservations. Cache
   eviction does not release a reservation while another consumer holds the object.
@@ -87,6 +108,11 @@ The application script checks the revision and patch applicability first, is
 idempotent, and starts no model or service. Roll back only these changes with
 `git -C edge0-kindi apply --reverse /absolute/path/to/edge0-kindi.patch`.
 
+For an older pilot checkout, use a fresh pinned checkout for this version; do not
+apply the full new patch on top of v0.1. Native tests need `nlohmann/json.hpp`:
+build the engine first, or set `NLOHMANN_INCLUDE` to its include root. The test
+script downloads nothing.
+
 On the Mac, build one job at a time:
 
 ```bash
@@ -113,8 +139,10 @@ output token IDs, per-request latency, cache telemetry and a summary. A timeout
 is adjustable with `--timeout`; it is not a reason to remove the memory watchdog.
 No OS page-cache flush, package install, or external API is used.
 
-The baseline is the **patched engine with prefix caching disabled**. This isolates
-cache effects; it is not a before/after measurement of all changes. For output
+Modes are **baseline** (prefix cache and batching disabled), **io** (batching on,
+prefix cache off), **cached** (both on), and optional **packed** (also uses sidecars).
+All include shared-budget and staging correctness fixes; this is not an upstream
+before/after test. For output
 parity against unmodified Edge0, also provide `--reference-dylib /path/to/original.dylib`.
 All modes run sequentially and retain the normal OS file cache, so SSD cold-start
 performance is not established. Fixture prompts are synthetic code comments:
@@ -132,8 +160,9 @@ short sample. A 64-token cap does not guarantee a 64-token answer.
 Prefix reuse primarily targets TTFT and total request time. It need not increase
 decode tokens/s. Compare the same case across modes and preserve the output
 parity and memory checks. Model loading is outside per-request timings; OS file
-caches are not cleared. The modes run in a fixed order, so repeated trials with
-controlled cache state are needed before claiming a performance improvement.
+caches are not cleared. Two trials run by default with reversed mode order in the second trial. OS page
+cache remains uncontrolled. Use `--trials 1` for a smoke check. Test
+`--prompt-tokens 16384`, then larger contexts, only after shorter contexts pass.
 
 The Linux host cannot execute this Apple Metal integration. Its earlier CPU-only
 Python Edge0 measurements are a different backend, not measurements of this
@@ -171,9 +200,54 @@ still necessary even after this check passes.
 * `macos/third_party/mlx/mlx/memory.h` in the pinned Edge0 tree documents the
   advisory nature of MLX memory limits.
 
+## Optional packed-layout experiment
+
+Create sidecars **on the destination Mac**, after the native checkpoint is complete:
+
+```bash
+python3 pack_experts.py --model-dir /path/to/Edge0-35B-A3B-preview \
+  --output /path/to/edge0-packed --rate-mib 15
+python3 verify_mac.py --dylib /path/to/libedge0_engine_native.dylib \
+  --reference-dylib /path/to/unmodified/libedge0_engine_native.dylib \
+  --model-dir /path/to/Edge0-35B-A3B-preview --packed-experts-dir /path/to/edge0-packed \
+  --max-new-tokens 64 --timeout 600 --output edge0-kindi-mac-result-v2
+```
+
+The packer supports the 35B checkpoint's fused three-dimensional experts. It
+requires extra SSD space roughly equal to expert weights and retains 5 GiB free
+headroom. It streams one region at a time, throttles output to the selected rate,
+refuses overwrites, and accepts `--layers 0` for a limited I/O experiment. Runtime
+packed mode requires all layers; it refuses partial or stale sidecars. Recreate
+sidecars after replacing or touching source shards. Original weights are untouched.
+CRC32 detects accidental corruption; it is not an authenticity/signature check.
+
+Add `--overlap-prefill` for a separate experiment with the 35B GPU/host overlap.
+It affects the io/cached/packed arms. Compare with the default experiment; it is
+not assumed faster. No speculative decoding or reduced expert count is enabled.
+
+## v0.2 local evidence
+
+The native portable cache/stream tests and six cross-language packed-reader tests
+pass under AddressSanitizer/UndefinedBehaviorSanitizer. These cover byte parity,
+corruption, truncation, stale sources, invalid layouts and refused overwrites.
+The comparison-gate tests reject token mismatches, missing cases, missing memory
+telemetry and packed mode that never exercises packed reads.
+
+One real 35B layer was packed under a 512 MiB Linux cgroup with swap disabled and
+15 MiB/s throttling. Seven sampled experts (1,769,472 bytes each) matched all nine
+original regions byte-for-byte. In the diagnostic pread comparison, requests fell
+from 63 to 7 per seven experts. **Warm Linux timings showed no gain.** This test
+uses sanitizers and checksums in both arms; its source-pread baseline is not the
+native engine's mmap path. It cannot establish inference acceleration, cold SSD
+performance, or any Mac result. Packed loading remains optional for that reason.
+
+The published `layer0-io.json` contains the raw diagnostic results. No new coding
+benchmark score, Metal tokens/s, 8 GiB whole-process fit or persistent disk prompt
+snapshot result is claimed.
+
 ## This distribution
 
 This repository contains an experimental patch and verification tools, **not model weights or a prebuilt Mac binary**.
-Download the portable ZIP and its SHA-256 checksum from [Releases](https://github.com/leo-kreisman/dge0-kindi/releases/tag/edge0-kindi-mac-pilot-v0.1.0).
+Download the portable ZIP and its SHA-256 checksum from [Releases](https://github.com/leo-kreisman/dge0-kindi/releases/tag/edge0-kindi-mac-pilot-v0.2.0).
 Compatible weights are published separately at [Edge0-35B-A3B-preview](https://huggingface.co/Edge0/Edge0-35B-A3B-preview) and [Edge0-8B-A1B-preview](https://huggingface.co/Edge0/Edge0-8B-A1B-preview). Use the complete compatible checkpoint, including its adapters and tokenizer.
 See LICENSE and NOTICE for source attribution.

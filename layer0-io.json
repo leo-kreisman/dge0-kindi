@@ -1,0 +1,70 @@
+{
+  "byte_parity": true,
+  "note": "I/O microbenchmark; warm OS cache uncontrolled; not inference or a Mac speed prediction",
+  "rows": [
+    {
+      "bytes": 12386304,
+      "experts": 7,
+      "mode": "source_9pread_crc",
+      "read_calls": 63,
+      "seconds": 0.070413596,
+      "trial": 0
+    },
+    {
+      "bytes": 12386304,
+      "experts": 7,
+      "mode": "packed_pread_crc",
+      "read_calls": 7,
+      "seconds": 0.072064145,
+      "trial": 0
+    },
+    {
+      "bytes": 12386304,
+      "experts": 7,
+      "mode": "packed_pread_crc",
+      "read_calls": 7,
+      "seconds": 0.067276139,
+      "trial": 1
+    },
+    {
+      "bytes": 12386304,
+      "experts": 7,
+      "mode": "source_9pread_crc",
+      "read_calls": 63,
+      "seconds": 0.056878788,
+      "trial": 1
+    },
+    {
+      "bytes": 12386304,
+      "experts": 7,
+      "mode": "source_9pread_crc",
+      "read_calls": 63,
+      "seconds": 0.059930572,
+      "trial": 2
+    },
+    {
+      "bytes": 12386304,
+      "experts": 7,
+      "mode": "packed_pread_crc",
+      "read_calls": 7,
+      "seconds": 0.068978036,
+      "trial": 2
+    },
+    {
+      "bytes": 12386304,
+      "experts": 7,
+      "mode": "packed_pread_crc",
+      "read_calls": 7,
+      "seconds": 0.068404836,
+      "trial": 3
+    },
+    {
+      "bytes": 12386304,
+      "experts": 7,
+      "mode": "source_9pread_crc",
+      "read_calls": 63,
+      "seconds": 0.060607901,
+      "trial": 3
+    }
+  ]
+}
