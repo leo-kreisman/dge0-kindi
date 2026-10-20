@@ -1,0 +1,869 @@
+diff --git a/macos/Makefile b/macos/Makefile
+index 6d3861f..f1013f4 100644
+--- a/macos/Makefile
++++ b/macos/Makefile
+@@ -4,6 +4,7 @@ export CARGO_TARGET_DIR := $(abspath target)
+ ENGINE_BUILD := work/engine-build
+ ENGINE_OUT   := target/engine
+ ENGINE_VERSION ?= 0.1.0
++BUILD_JOBS ?= 1
+ 
+ .PHONY: help setup engine app check-prereqs
+ 
+@@ -20,7 +21,7 @@ setup: check-prereqs
+ 
+ engine:
+ 	cmake -S crates/engine-native -B $(ENGINE_BUILD) -DCMAKE_BUILD_TYPE=Release -DE0N_VERSION=$(ENGINE_VERSION)
+-	cmake --build $(ENGINE_BUILD) --parallel 8
++	cmake --build $(ENGINE_BUILD) --parallel $(BUILD_JOBS)
+ 	@mkdir -p $(ENGINE_OUT)
+ 	rm -f $(ENGINE_OUT)/libedge0_engine_native.dylib $(ENGINE_OUT)/libmlx.dylib
+ 	cp -f $(ENGINE_BUILD)/out/libedge0_engine_native.dylib $(ENGINE_OUT)/
+diff --git a/macos/crates/engine-native/src/abiface.cpp b/macos/crates/engine-native/src/abiface.cpp
+index b9423bd..ae65561 100644
+--- a/macos/crates/engine-native/src/abiface.cpp
++++ b/macos/crates/engine-native/src/abiface.cpp
+@@ -24,6 +24,8 @@
+ #include "genstream.hpp"
+ #include "prerouter.hpp"
+ #include "prefixcache.hpp"
++#include "joint_budget.hpp"
++#include "mlx/memory.h"
+ #include "sampling.hpp"
+ 
+ #include <nlohmann/json.hpp>
+@@ -85,6 +87,10 @@ struct E0Engine {
+   std::string last_error;
+   std::shared_ptr<e0n::ModelFiles> files;
+   std::shared_ptr<e0n::ExpertMap> experts;
++  uint64_t memory_limit = 8ull << 30;
++  uint64_t memory_reserve = 1ull << 30;
++  size_t checkpoint_every = 1024;
++  std::shared_ptr<e0n::JointBudget> joint_budget;
+   std::unique_ptr<e0n::PrefixCache> prefix_cache;
+   std::string model_identity;
+   std::unique_ptr<e0n::Net35> net35;
+@@ -98,17 +104,36 @@ struct E0Engine {
+ };
+ 
+ struct CachedState35 {
++  std::shared_ptr<e0n::JointBudget::Lease> admission;
+   e0n::State35 state;
+   std::vector<float> logits;
+ };
+ 
+ struct CachedState8 {
++  std::shared_ptr<e0n::JointBudget::Lease> admission;
+   e0n::State8b state;
+   std::vector<float> logits;
+ };
+ 
+ namespace {
+ 
++// Process measurements are deliberately separate from managed payload bytes.
++// Metal's set_memory_limit is advisory, not an OS-enforced process ceiling.
++void guard_memory(E0Engine *h) {
++  auto m = e0n::mem_sample();
++  if (!m.resident_bytes && !m.footprint_bytes)
++    throw std::runtime_error("memory guard: process memory measurement unavailable");
++  const uint64_t ceiling = h->memory_limit - h->memory_reserve;
++  if (std::max(m.resident_bytes, m.footprint_bytes) < ceiling) return;
++  h->prefix_cache->clear();
++  if (h->net35) h->net35->drop_cached();
++  if (h->net8b) h->net8b->drop_cached();
++  mlx::core::clear_cache();
++  m = e0n::mem_sample();
++  if (std::max(m.resident_bytes, m.footprint_bytes) >= ceiling)
++    throw std::runtime_error("memory guard: request stopped before exhausting 8 GiB budget");
++}
++
+ mlx::core::array snapshot_array(const mlx::core::array &a) {
+   auto out = mlx::core::copy(a);
+   mlx::core::eval(out);
+@@ -186,6 +211,9 @@ uint64_t state_bytes(const e0n::State35 &s) {
+   for (const auto &v : s.pr.cap_hidden) n += v.size() * sizeof(float);
+   for (const auto &v : s.pr.cap_exec) n += v.size() * sizeof(int64_t);
+   for (const auto &v : s.pr.prev_exec) n += v.size() * sizeof(int64_t);
++  for (const auto &v : s.pr.pred)
++    n += sizeof(v) + v.inds.size() * sizeof(int64_t) + v.scores.size() * sizeof(double);
++  n += s.pr.pred_avail.size();
+   return n;
+ }
+ 
+@@ -196,6 +224,9 @@ uint64_t state_bytes(const e0n::State8b &s) {
+   for (const auto &v : s.pr.cap_hidden) n += v.size() * sizeof(float);
+   for (const auto &v : s.pr.cap_exec) n += v.size() * sizeof(int64_t);
+   for (const auto &v : s.pr.prev_exec) n += v.size() * sizeof(int64_t);
++  for (const auto &v : s.pr.pred)
++    n += sizeof(v) + v.inds.size() * sizeof(int64_t) + v.scores.size() * sizeof(double);
++  n += s.pr.pred_avail.size();
+   return n;
+ }
+ 
+@@ -207,6 +238,28 @@ uint64_t snapshot_bytes(const CachedState8 &s) {
+   return state_bytes(s.state) + s.logits.size() * sizeof(float);
+ }
+ 
++template <class State, class Capture>
++void save_checkpoint(E0Engine *h, const State &state,
++                     const std::vector<int32_t> &tokens,
++                     const std::vector<float> &logits, Capture capture) {
++  // Check before COPY, including token index and a conservative metadata charge.
++  const uint64_t bytes = state_bytes(state) + logits.size() * sizeof(float) +
++                        tokens.size() * sizeof(int32_t) + h->model_identity.size() + 4096;
++  if (!h->prefix_cache->eligible(tokens.size(), bytes)) return;
++  if (state.position < 0 || uint64_t(state.position) != tokens.size())
++    throw std::runtime_error("checkpoint state/token position mismatch");
++  guard_memory(h);
++  auto m = e0n::mem_sample();
++  const uint64_t used = std::max(m.resident_bytes, m.footprint_bytes);
++  const uint64_t ceiling = h->memory_limit - h->memory_reserve;
++  if (used >= ceiling || bytes > ceiling - used) return;
++  auto admission = h->joint_budget->acquire(bytes);
++  if (!admission) return;  // Optional cache work must not abort inference.
++  auto snap = capture(state, logits);
++  snap->admission = std::move(admission);
++  h->prefix_cache->put(h->model_identity, tokens, snap, bytes, nullptr, !logits.empty());
++}
++
+ }  // namespace
+ 
+ struct E0Tokenizer {
+@@ -352,6 +405,8 @@ E0Engine *e0_engine_create(const char *tier_id, const char *model_dir,
+       if (cj.contains("model_identity")) identity = cj["model_identity"].dump();
+       if (cj.contains("prefix_cache") && cj["prefix_cache"].is_object()) {
+         const auto &pc = cj["prefix_cache"];
++        if (pc.contains("checkpoint_every") && pc["checkpoint_every"].is_number_unsigned())
++          h->checkpoint_every = pc["checkpoint_every"].get<size_t>();
+         if (pc.contains("enabled") && pc["enabled"].is_boolean())
+           pcc.enabled = pc["enabled"].get<bool>();
+         if (pc.contains("budget_bytes") && pc["budget_bytes"].is_number_unsigned())
+@@ -366,7 +421,12 @@ E0Engine *e0_engine_create(const char *tier_id, const char *model_dir,
+   }
+   h->model_identity = std::move(identity);
+   h->prefix_cache = std::make_unique<e0n::PrefixCache>(pcc);
++  h->joint_budget = std::make_shared<e0n::JointBudget>(2ull << 30);
++  h->joint_budget->add_evictor([h] { return h->prefix_cache->evict_one(); });
+   try {
++    mlx::core::set_cache_limit(128ull << 20);
++    mlx::core::set_memory_limit(6ull << 30);
++
+     auto cj = nlohmann::json::parse(h->config_json, nullptr, false);
+     if (!cj.is_discarded() && cj.contains("forward") && cj["forward"].is_string()) {
+       const std::string fwd = cj["forward"].get<std::string>();
+@@ -441,6 +501,21 @@ E0Engine *e0_engine_create(const char *tier_id, const char *model_dir,
+     delete h;
+     return nullptr;
+   }
++  try {
++    if (h->net35) {
++      h->net35->set_budget(h->joint_budget);
++      h->net35->memory_guard = [h] { guard_memory(h); };
++    }
++    if (h->net8b) {
++      h->net8b->set_budget(h->joint_budget);
++      h->net8b->memory_guard = [h] { guard_memory(h); };
++    }
++    guard_memory(h);
++  } catch (const std::exception &e) {
++    note(nlohmann::json({{"error", "E-MEMORY-BUDGET"}, {"message", e.what()}}).dump());
++    delete h;
++    return nullptr;
++  }
+   return pool_new(g_engines, h);
+ }
+ 
+@@ -530,6 +605,12 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
+     if (hit.snapshot) {
+       try {
+         auto snap = std::static_pointer_cast<CachedState35>(hit.snapshot);
++        guard_memory(h);
++        const auto ms = e0n::mem_sample();
++        const uint64_t used = std::max(ms.resident_bytes, ms.footprint_bytes);
++        const uint64_t ceiling = h->memory_limit - h->memory_reserve;
++        if (used >= ceiling || state_bytes(snap->state) > ceiling - used)
++          throw std::runtime_error("memory guard: insufficient room to restore cached state");
+         restore_state35(*h->st35, snap->state);
+         cached_tokens = hit.matched_tokens;
+         prefill_prompt.assign(prompt.begin() + static_cast<std::ptrdiff_t>(cached_tokens), prompt.end());
+@@ -553,8 +634,7 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
+     }
+     ns->set_on_prefill([h](const std::vector<int32_t> &full, const std::vector<float> &logits) {
+       try {
+-        auto snap = capture_state35(*h->st35, logits);
+-        h->prefix_cache->put(h->model_identity, full, snap, snapshot_bytes(*snap));
++        save_checkpoint(h, *h->st35, full, logits, capture_state35);
+       } catch (const std::exception &e) {
+         h->last_error = std::string("{\"error\":\"E-INTERNAL\",\"message\":\"") +
+                         esc(e.what()) + "\"}";
+@@ -562,8 +642,7 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
+     });
+     ns->set_on_complete([h](const std::vector<int32_t> &full, const std::vector<float> &logits) {
+       try {
+-        auto snap = capture_state35(*h->st35, logits);
+-        h->prefix_cache->put(h->model_identity, full, snap, snapshot_bytes(*snap));
++        save_checkpoint(h, *h->st35, full, logits, capture_state35);
+       } catch (const std::exception &e) {
+         h->last_error = std::string("{\"error\":\"E-INTERNAL\",\"message\":\"") +
+                         esc(e.what()) + "\"}";
+@@ -574,6 +653,12 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
+     if (hit.snapshot) {
+       try {
+         auto snap = std::static_pointer_cast<CachedState8>(hit.snapshot);
++        guard_memory(h);
++        const auto ms = e0n::mem_sample();
++        const uint64_t used = std::max(ms.resident_bytes, ms.footprint_bytes);
++        const uint64_t ceiling = h->memory_limit - h->memory_reserve;
++        if (used >= ceiling || state_bytes(snap->state) > ceiling - used)
++          throw std::runtime_error("memory guard: insufficient room to restore cached state");
+         restore_state8(*h->st8b, snap->state);
+         cached_tokens = hit.matched_tokens;
+         prefill_prompt.assign(prompt.begin() + static_cast<std::ptrdiff_t>(cached_tokens), prompt.end());
+@@ -597,8 +682,7 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
+     }
+     ns->set_on_prefill([h](const std::vector<int32_t> &full, const std::vector<float> &logits) {
+       try {
+-        auto snap = capture_state8(*h->st8b, logits);
+-        h->prefix_cache->put(h->model_identity, full, snap, snapshot_bytes(*snap));
++        save_checkpoint(h, *h->st8b, full, logits, capture_state8);
+       } catch (const std::exception &e) {
+         h->last_error = std::string("{\"error\":\"E-INTERNAL\",\"message\":\"") +
+                         esc(e.what()) + "\"}";
+@@ -606,14 +690,36 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
+     });
+     ns->set_on_complete([h](const std::vector<int32_t> &full, const std::vector<float> &logits) {
+       try {
+-        auto snap = capture_state8(*h->st8b, logits);
+-        h->prefix_cache->put(h->model_identity, full, snap, snapshot_bytes(*snap));
++        save_checkpoint(h, *h->st8b, full, logits, capture_state8);
+       } catch (const std::exception &e) {
+         h->last_error = std::string("{\"error\":\"E-INTERNAL\",\"message\":\"") +
+                         esc(e.what()) + "\"}";
+       }
+     });
+   }
++  if (h->net35) {
++    ns->set_on_checkpoint(h->checkpoint_every,
++      [h](const auto &ids, const auto &lg) {
++        save_checkpoint(h, *h->st35, ids, lg, capture_state35);
++      });
++    auto ids = ns->history();
++    h->net35->prefill_checkpoint = [h, ids = std::move(ids), cached_tokens](size_t n) {
++      if (!h->checkpoint_every) return;
++      std::vector<int32_t> prefix(ids.begin(), ids.begin() + cached_tokens + n);
++      save_checkpoint(h, *h->st35, prefix, {}, capture_state35);
++    };
++  } else if (h->net8b) {
++    ns->set_on_checkpoint(h->checkpoint_every,
++      [h](const auto &ids, const auto &lg) {
++        save_checkpoint(h, *h->st8b, ids, lg, capture_state8);
++      });
++    auto ids = ns->history();
++    h->net8b->prefill_checkpoint = [h, ids = std::move(ids), cached_tokens](size_t n) {
++      if (!h->checkpoint_every) return;
++      std::vector<int32_t> prefix(ids.begin(), ids.begin() + cached_tokens + n);
++      save_checkpoint(h, *h->st8b, prefix, {}, capture_state8);
++    };
++  }
+   h->prefix_cache->set_last_prefill_tokens(prompt_len - cached_tokens);
+   if (h->active) h->active->seal();
+   h->active = ns;
+@@ -641,7 +747,13 @@ E0Status e0_next(E0Engine *h, E0Stream *stream, E0TokenOut *out) {
+     out->flags = 0;
+   }
+   int32_t tok = 0;
+-  const bool got = st->next_token(tok);
++  bool got = false;
++  try { got = st->next_token(tok); }
++  catch (const std::exception &e) {
++    st->seal();
++    h->last_error = nlohmann::json({{"error", "E-MEMORY-OR-FORWARD"}, {"message", e.what()}}).dump();
++    return E0_ERR_INTERNAL;
++  }
+   if (got) {
+     if (out) out->token = tok;
+     return E0_NOTIFIED;
+@@ -655,9 +767,10 @@ E0Status e0_next(E0Engine *h, E0Stream *stream, E0TokenOut *out) {
+       st->owner()->has_recs = true;
+       if (errored) {
+         st->owner()->last_error =
+-            "{\"error\":\"E-INTERNAL\",\"message\":" + esc(em) + "}";
++            nlohmann::json({{"error", "E-INTERNAL"}, {"message", em}}).dump();
+         if (st->owner()->active == st) st->owner()->active = nullptr;
+-        g_streams.erase(stream);
++        // Keep the terminal stream until turn_reset/destroy. This function
++        // still holds st->mu; deleting it here would unlock a freed mutex.
+       }
+     }
+   }
+@@ -714,8 +827,14 @@ E0Status e0_stats(E0Engine *h, char *buf, size_t buf_len, size_t *written) {
+                        ",\"last_cached_tokens\":" + std::to_string(pc.last_cached_tokens) +
+                        ",\"last_prefill_tokens\":" + std::to_string(pc.last_prefill_tokens) +
+                        ",\"last_reason\":\"" + esc(pc.last_reason) + "\"}";
++  const auto jm = h->joint_budget->metrics();
++  const std::string joint = ",\"joint_budget\":" + nlohmann::json({
++      {"managed_limit_bytes", jm.limit}, {"managed_live_bytes", jm.live},
++      {"managed_peak_bytes", jm.peak}, {"rejections", jm.rejected},
++      {"target_process_bytes", h->memory_limit}, {"reserve_bytes", h->memory_reserve},
++      {"os_enforced", false}}).dump();
+   std::string json =
+-      route + diag + prefix + ",\"loaded_experts\":" + std::to_string(c.loads) +
++      route + diag + prefix + joint + ",\"loaded_experts\":" + std::to_string(c.loads) +
+       ",\"cache_hits\":" + std::to_string(c.hits) +
+       ",\"cache_misses\":" + std::to_string(c.misses) +
+       ",\"cache_evictions\":" + std::to_string(c.evictions) +
+diff --git a/macos/crates/engine-native/src/expertio.cpp b/macos/crates/engine-native/src/expertio.cpp
+index a7516f3..5119960 100644
+--- a/macos/crates/engine-native/src/expertio.cpp
++++ b/macos/crates/engine-native/src/expertio.cpp
+@@ -137,6 +137,15 @@ size_t SharedExpertCache::size() {
+   std::lock_guard<std::mutex> lk(mu_);
+   return map_.size();
+ }
++bool SharedExpertCache::evict_one() {
++  std::lock_guard<std::mutex> lk(mu_);
++  if (order_.empty()) return false;
++  const auto key = order_.front();
++  order_.pop_front();
++  map_.erase(key);
++  ++evictions_;
++  return true;
++}
+ bool SharedExpertCache::contains(uint64_t key) {
+   std::lock_guard<std::mutex> lk(mu_);
+   return map_.count(key) > 0;
+@@ -165,6 +174,15 @@ std::shared_ptr<Bundle> PrefetchBuffer::pop(uint64_t key) {  // 74-75
+     if (*o == key) { order_.erase(o); break; }
+   return b;
+ }
++bool PrefetchBuffer::evict_one() {
++  std::lock_guard<std::mutex> lk(mu_);
++  if (order_.empty()) return false;
++  const auto key = order_.front();
++  order_.pop_front();
++  map_.erase(key);
++
++  return true;
++}
+ bool PrefetchBuffer::contains(uint64_t key) {
+   std::lock_guard<std::mutex> lk(mu_);
+   return map_.count(key) > 0;
+@@ -188,7 +206,8 @@ IoPool::IoPool(int n) {
+       }
+     });
+ }
+-IoPool::~IoPool() {
++IoPool::~IoPool() { shutdown(); }
++void IoPool::shutdown() {
+   {
+     std::lock_guard<std::mutex> lk(mu_);
+     stop_ = true;
+@@ -205,6 +224,13 @@ ExpertIo::ExpertIo(const ModelFiles *files, int cache_slots, int prefetch_cap, i
+     : files_(files), cache_(cache_slots), pbuf_(prefetch_cap), load_pool_(load_threads),
+       prefetch_pool_(prefetch_threads) {}
+ 
++ExpertIo::~ExpertIo() {
++  // Workers touch inflight_, heap_, layers_ and cache_. Drain while those
++  // members are still alive, not during reverse-order member destruction.
++  prefetch_pool_.shutdown();
++  load_pool_.shutdown();
++}
++
+ namespace {
+ void materialize(const std::shared_ptr<Bundle> &b) {
+   std::vector<mx::array> v;
+@@ -249,7 +275,16 @@ std::shared_ptr<Bundle> ExpertIo::build(int li, int64_t expert) {
+   int idx = layer_idx(li);
+   if (idx < 0) return nullptr;
+   Layer &L = layers_[size_t(idx)];
++  uint64_t expected = sizeof(Bundle);
++  for (const auto &r : L.reg) {
++    if (!r.ti || r.per > UINT64_MAX - expected) return nullptr;
++    expected += r.per;
++  }
++  auto admission = budget_ ? budget_->acquire(expected) : nullptr;
++  if (budget_ && !admission)
++    throw std::runtime_error("joint memory budget: expert allocation rejected");
+   auto b = std::make_shared<Bundle>();
++  b->admission = std::move(admission);
+   uint64_t tot = 0;
+   for (int i = 0; i < 9; i++) {
+       const auto &r = L.reg[i];
+@@ -329,8 +364,7 @@ std::map<int64_t, std::shared_ptr<Bundle>> ExpertIo::get_bundles(
+         inflight_.erase(key_of(li, e));
+       }
+       if (!b) {
+-        std::fprintf(stderr, "expertio: inflight build failed L%d E%lld\n", li, (long long)e);
+-        continue;
++        throw std::runtime_error("required inflight expert unavailable");
+       }
+       phi_++; hits_++;
+       if (L) L->bump_count(e, decay);
+@@ -344,9 +378,7 @@ std::map<int64_t, std::shared_ptr<Bundle>> ExpertIo::get_bundles(
+     for (size_t i = 0; i < cold.size(); i++) {
+       auto b = fs[i].get();
+       if (!b) {
+-        std::fprintf(stderr, "expertio: build failed L%d E%lld (missing region key or map OOB)\n", li,
+-                     (long long)cold[i]);
+-        continue;
++        throw std::runtime_error("required expert build failed");
+       }
+       loads_++; misses_++;
+       if (L) L->bump_count(cold[i], decay);
+@@ -390,13 +422,14 @@ void ExpertIo::prefetch(int li, const std::vector<int64_t> &experts) {
+   for (auto &[e, fut] : sub) {
+     uint64_t key = key_of(li, e);
+     prefetch_pool_.submit([this, e, key, fut] {
+-      auto b = fut.get();
++      std::shared_ptr<Bundle> b;
++      try { b = fut.get(); } catch (...) { ++pwaste_; }
+       {
+         std::lock_guard<std::mutex> lk(infl_mu_);
+         auto it = inflight_.find(key);
+         if (it != inflight_.end()) inflight_.erase(it);  // 530
+       }
+-      if (cache_.peek(key)) return;                       // 531
++      if (!b || cache_.peek(key)) return;                       // 531
+       if (!pbuf_.put(key, b)) pwaste_++;                  // 533-535
+     });
+   }
+diff --git a/macos/crates/engine-native/src/expertio.hpp b/macos/crates/engine-native/src/expertio.hpp
+index 1f4d17e..2daae7c 100644
+--- a/macos/crates/engine-native/src/expertio.hpp
++++ b/macos/crates/engine-native/src/expertio.hpp
+@@ -19,6 +19,7 @@
+ #include <mlx/mlx.h>
+ 
+ #include "safio.hpp"
++#include "joint_budget.hpp"
+ 
+ namespace e0n {
+ namespace mx = mlx::core;
+@@ -27,6 +28,8 @@ namespace mx = mlx::core;
+ // not file key order (gate_proj before up_proj). Shape is the stacked tensor
+ // without the expert axis [O,K]; elements live in mlx-owned buffers.
+ struct Bundle {
++  // Declared first so the reservation outlives destruction of array handles.
++  std::shared_ptr<JointBudget::Lease> admission;
+   Bundle()
+       : f{mx::array(0.f), mx::array(0.f), mx::array(0.f), mx::array(0.f), mx::array(0.f),
+          mx::array(0.f), mx::array(0.f), mx::array(0.f), mx::array(0.f)} {}
+@@ -44,6 +47,7 @@ class SharedExpertCache {
+   void put(uint64_t key, std::shared_ptr<Bundle> b);
+   std::shared_ptr<Bundle> pop(uint64_t key);
+   bool contains(uint64_t key);
++  bool evict_one();
+   size_t size();
+   uint64_t evictions() const { return evictions_; }
+ 
+@@ -61,6 +65,7 @@ class PrefetchBuffer {
+   bool put(uint64_t key, std::shared_ptr<Bundle> b);     // true = kept, false = overflow drop
+   std::shared_ptr<Bundle> pop(uint64_t key);
+   bool contains(uint64_t key);
++  bool evict_one();
+   void set_cap(int c) { cap_ = c; }
+ 
+  private:
+@@ -74,6 +79,7 @@ class IoPool {
+  public:
+   explicit IoPool(int n);
+   ~IoPool();
++  void shutdown();
+   template <class F>
+   auto submit(F &&f) -> std::shared_future<decltype(f())> {
+     using R = decltype(f());
+@@ -118,7 +124,15 @@ class ExpertIo {
+ 
+   ExpertIo(const ModelFiles *files, int cache_slots, int prefetch_cap, int load_threads,
+            int prefetch_threads);
++  ~ExpertIo();
+   void add_layer(const LayerCfg &cfg);
++  void set_budget(std::shared_ptr<JointBudget> budget) {
++    budget_ = std::move(budget);
++    budget_->add_evictor([this] { return pbuf_.evict_one(); });
++    budget_->add_evictor([this] { return cache_.evict_one(); });
++  }
++  void drop_cached() { while (pbuf_.evict_one()) {} while (cache_.evict_one()) {} }
++
+ 
+   std::shared_ptr<Bundle> build(int li, int64_t expert);
+   // LRU → prefetch_buf.pop (promote) → wait inflight (promote) → pool sync + LRU.
+@@ -252,6 +266,7 @@ class ExpertIo {
+     void sub(uint64_t b) { live.fetch_sub(b); }
+   };
+ 
++  std::shared_ptr<JointBudget> budget_;
+   const ModelFiles *files_;
+   struct ShardMaps {
+     ~ShardMaps();
+diff --git a/macos/crates/engine-native/src/genstream.hpp b/macos/crates/engine-native/src/genstream.hpp
+index 337f1fa..636e96b 100644
+--- a/macos/crates/engine-native/src/genstream.hpp
++++ b/macos/crates/engine-native/src/genstream.hpp
+@@ -58,8 +58,12 @@ class StreamBase {
+         if (!plan.experts.empty()) warm_(plan);
+       }
+       if (!step(cur_, lg, recs, err)) { note_err(err); return false; }
++      fed_tokens_.push_back(cur_);
+       last_logits_ = lg;
+       last_recs_ = recs;
++      if (on_checkpoint_ && checkpoint_every_ &&
++          fed_tokens_.size() % checkpoint_every_ == 0)
++        on_checkpoint_(fed_tokens_, lg);
+     }
+     int32_t t;
+     if (!p_.teacher_tokens.empty()) {
+@@ -124,6 +128,11 @@ class StreamBase {
+     on_complete_ = [cb = std::move(cb)](const std::vector<int32_t> &ids,
+                                         const std::vector<float> &) { cb(ids); };
+   }
++  void set_on_checkpoint(size_t every,
++      std::function<void(const std::vector<int32_t> &, const std::vector<float> &)> cb) {
++    checkpoint_every_ = every;
++    on_checkpoint_ = std::move(cb);
++  }
+   void set_owner(E0Engine *h) { owner_ = h; }
+   bool finished() const { return finished_; }
+   bool errored() const { return err_; }
+@@ -137,7 +146,7 @@ class StreamBase {
+   bool terminal() const { return finished_ && !err_; }
+   const std::vector<int32_t> &history() const { return hist_; }
+   StreamBase(std::vector<int32_t> prompt, sampling::Params p)
+-      : prompt_(std::move(prompt)), prefill_prompt_(prompt_), p_(std::move(p)), hist_(prompt_) {}
++      : prompt_(std::move(prompt)), prefill_prompt_(prompt_), p_(std::move(p)), hist_(prompt_), fed_tokens_(prompt_) {}
+ 
+  protected:
+   virtual bool prefill(const std::vector<int32_t> &, std::vector<float> &,
+@@ -156,9 +165,12 @@ class StreamBase {
+   void finish_natural() {
+     if (!finished_) {
+       finished_ = true;
+-      if (!completion_called_ && on_complete_) {
++      if (started_ && !transport_ && !last_logits_.empty() && !completion_called_ && on_complete_) {
+         completion_called_ = true;
+-        on_complete_(hist_, last_logits_);
++        // The last emitted token may not have been evaluated (token cap).
++        // A matched stop string can also trim hist_ without rewinding state.
++        // Index only the tokens actually represented by the recurrent/KV state.
++        on_complete_(fed_tokens_, last_logits_);
+       }
+     }
+   }
+@@ -173,6 +185,9 @@ class StreamBase {
+   std::vector<int32_t> prompt_;
+   std::vector<int32_t> prefill_prompt_;
+   std::vector<int32_t> hist_;
++  std::vector<int32_t> fed_tokens_;
++  size_t checkpoint_every_ = 0;
++  std::function<void(const std::vector<int32_t> &, const std::vector<float> &)> on_checkpoint_;
+   size_t generated_ = 0;
+   bool emitted_ = false;
+   bool cancelled_ = false;
+diff --git a/macos/crates/engine-native/src/joint_budget.hpp b/macos/crates/engine-native/src/joint_budget.hpp
+new file mode 100644
+index 0000000..0d3f5b2
+--- /dev/null
++++ b/macos/crates/engine-native/src/joint_budget.hpp
+@@ -0,0 +1,67 @@
++#pragma once
++#include <cstdint>
++#include <functional>
++#include <memory>
++#include <mutex>
++#include <stdexcept>
++#include <vector>
++
++namespace e0n {
++// Tracks live payload ownership, not just entries still present in an LRU.
++// Runtime/allocator/mmap overhead is separately checked by the process guard.
++class JointBudget {
++  struct State {
++    std::mutex mu;
++    uint64_t limit, live = 0, peak = 0, rejected = 0;
++    explicit State(uint64_t n) : limit(n) {}
++  };
++ public:
++  class Lease {
++    friend class JointBudget;
++    std::shared_ptr<State> state_;
++    uint64_t bytes_;
++   public:
++    Lease(std::shared_ptr<State> s, uint64_t n) noexcept : state_(std::move(s)), bytes_(n) {}
++    Lease(const Lease &) = delete;
++    ~Lease() { std::lock_guard<std::mutex> g(state_->mu); state_->live -= bytes_; }
++  };
++  struct Metrics { uint64_t limit, live, peak, rejected; };
++  explicit JointBudget(uint64_t limit) : state_(std::make_shared<State>(limit)) {}
++  // Register once, before worker threads start using the budget. No callback
++  // is invoked with the budget mutex held. Cache eviction must be thread safe.
++  void add_evictor(std::function<bool()> f) { evictors_.push_back(std::move(f)); }
++  std::shared_ptr<Lease> acquire(uint64_t n) {
++    {
++      std::lock_guard<std::mutex> g(state_->mu);
++      if (n > state_->limit) { ++state_->rejected; return {}; }
++    }
++    for (;;) {
++      {
++        std::lock_guard<std::mutex> g(state_->mu);
++        if (n <= state_->limit - state_->live) {
++          auto lease = std::make_shared<Lease>(state_, n);
++          state_->live += n;
++          if (state_->live > state_->peak) state_->peak = state_->live;
++          return lease;
++        }
++      }
++      bool progress = false;
++      for (auto &evict : evictors_) {
++        if (evict()) { progress = true; break; }
++      }
++      if (!progress) {
++        std::lock_guard<std::mutex> g(state_->mu);
++        ++state_->rejected;
++        return {};
++      }
++    }
++  }
++  Metrics metrics() const {
++    std::lock_guard<std::mutex> g(state_->mu);
++    return {state_->limit, state_->live, state_->peak, state_->rejected};
++  }
++ private:
++  std::shared_ptr<State> state_;
++  std::vector<std::function<bool()>> evictors_;
++};
++} // namespace e0n
+diff --git a/macos/crates/engine-native/src/net35.cpp b/macos/crates/engine-native/src/net35.cpp
+index a4e499c..7f253da 100644
+--- a/macos/crates/engine-native/src/net35.cpp
++++ b/macos/crates/engine-native/src/net35.cpp
+@@ -429,6 +429,7 @@ void Net35::reset_state(State35 &st) const {
+ 
+ bool Net35::layer_fwd(Layer &L, int li, mx::array &x, State35 &st, bool decode, RouteRec &rec,
+                       mx::array *m_in_out, std::string &err) {
++  if (memory_guard) memory_guard();
+   const int64_t T = x.shape(1);
+   const auto dt = x.dtype();
+   const int64_t keyd = hk_ * dk_, vald = hv_ * dv_;
+@@ -1027,6 +1028,7 @@ bool Net35::prefill_batched_(const std::vector<int32_t> &tokens, State35 &st,
+         return false;
+       st.position += n;  // base.py:83 self.pos += len(chunk)
+       if (!stage_all_gpu(st, err, nullptr)) return false;
++      if (!last && prefill_checkpoint) prefill_checkpoint(size_t(start + n));
+     }
+     prefill_end_(st);
+     logits_last = std::move(lg);
+@@ -1049,6 +1051,7 @@ bool Net35::forward_chunk_batched_(const int32_t *tok, int64_t T, State35 &st,
+   const bool cb = T > 1 && reg_.prefill_hot > 0 && !prefill_ondemand();
+   std::vector<RouteRec> local_recs;
+   for (size_t li = 0; li < layers_.size(); li++) {
++    if (memory_guard) memory_guard();
+     if (cb) prefill_before_layer(static_cast<int>(li));  // qwen3_5.py:285-287 before_layer_cb
+     RouteRec rec;
+     if (!layer_fwd(layers_[li], static_cast<int>(li), x, st, false, rec, nullptr, err))
+@@ -1064,6 +1067,10 @@ bool Net35::forward_chunk_batched_(const int32_t *tok, int64_t T, State35 &st,
+     }
+     local_recs.push_back(std::move(rec));
+   }
++  if (!to_host) {
++    mx::eval(x);
++    return true;
++  }
+   mx::array xs = e0_rms_norm(
+       x, mx::astype(wrap_f32(final_norm_w_, mkshape({H_})), mx::bfloat16), eps_);
+   mx::array lastrow =
+diff --git a/macos/crates/engine-native/src/net35.hpp b/macos/crates/engine-native/src/net35.hpp
+index fee1cf2..afc9243 100644
+--- a/macos/crates/engine-native/src/net35.hpp
++++ b/macos/crates/engine-native/src/net35.hpp
+@@ -61,6 +61,10 @@ class Net35 {
+   uint64_t dense_resident_bytes() const { return dense_bytes_; }
+   void prefetch(const Step &plan);
+   ExpertIo::Metrics io_metrics() const { return io_->snapshot(); }
++  void set_budget(std::shared_ptr<JointBudget> budget) { io_->set_budget(std::move(budget)); }
++  void drop_cached() { io_->drop_cached(); }
++  std::function<void()> memory_guard;
++  std::function<void(size_t)> prefill_checkpoint;
+   void shard_warm(const std::vector<std::string> &shard_names, bool seq);
+ 
+   void init_state(State35 &st) const;
+diff --git a/macos/crates/engine-native/src/net8b.cpp b/macos/crates/engine-native/src/net8b.cpp
+index 8ed310a..79205d8 100644
+--- a/macos/crates/engine-native/src/net8b.cpp
++++ b/macos/crates/engine-native/src/net8b.cpp
+@@ -561,6 +561,7 @@ void Net8b::reset_state(State8b &st) const {
+ 
+ bool Net8b::layer_fwd(Layer &L, int li, mx::array &x, State8b &st, bool decode, bool prefill_seed,
+                       RouteRec &rec, std::string &err) {
++  if (memory_guard) memory_guard();
+   const int64_t T = x.shape(1);
+   const auto dt = x.dtype();
+   auto norm_w = [&](const std::vector<float> &v) {
+@@ -1237,6 +1238,7 @@ bool Net8b::prefill_batched_(const std::vector<int32_t> &tokens, State8b &st,
+                                   last ? probe : nullptr))
+         return false;
+       st.position += n;  // base.py:83
++      if (!last && prefill_checkpoint) prefill_checkpoint(size_t(start + n));
+     }
+     if (!prefill_end_(st, err)) return false;
+     logits_last = std::move(lg);
+@@ -1259,6 +1261,7 @@ bool Net8b::forward_chunk_batched_(const int32_t *tok, int64_t T, State8b &st,
+                   (reg_.full_layer_prefill || reg_.prefill_hot > 0);
+   std::vector<RouteRec> local_recs;
+   for (size_t li = 0; li < layers_.size(); li++) {
++    if (memory_guard) memory_guard();
+     if (cb) prefill_before_layer(static_cast<int>(li));
+     RouteRec rec;
+     if (!layer_fwd(layers_[li], static_cast<int>(li), x, st, false, true, rec, err))
+@@ -1274,6 +1277,10 @@ bool Net8b::forward_chunk_batched_(const int32_t *tok, int64_t T, State8b &st,
+     }
+     if (layers_[li].has_moe) local_recs.push_back(std::move(rec));
+   }
++  if (!to_host) {
++    mx::eval(x);
++    return true;
++  }
+   mx::array xs = e0_rms_norm(
+       x, mx::astype(wrap_f32(final_norm_w_, mkshape({H_})), mx::bfloat16), eps_);
+   mx::array lastrow =
+diff --git a/macos/crates/engine-native/src/net8b.hpp b/macos/crates/engine-native/src/net8b.hpp
+index 26fb1bb..499bbf7 100644
+--- a/macos/crates/engine-native/src/net8b.hpp
++++ b/macos/crates/engine-native/src/net8b.hpp
+@@ -44,6 +44,10 @@ class Net8b {
+   uint64_t dense_resident_bytes() const { return dense_bytes_; }
+   void prefetch(const Step &plan);
+   ExpertIo::Metrics io_metrics() const { return io_->snapshot(); }
++  void set_budget(std::shared_ptr<JointBudget> budget) { io_->set_budget(std::move(budget)); }
++  void drop_cached() { io_->drop_cached(); }
++  std::function<void()> memory_guard;
++  std::function<void(size_t)> prefill_checkpoint;
+   void shard_warm(const std::vector<std::string> &shard_names, bool seq);
+ 
+   void init_state(State8b &st) const;
+diff --git a/macos/crates/engine-native/src/prefixcache.hpp b/macos/crates/engine-native/src/prefixcache.hpp
+index ae72667..48f0673 100644
+--- a/macos/crates/engine-native/src/prefixcache.hpp
++++ b/macos/crates/engine-native/src/prefixcache.hpp
+@@ -77,6 +77,7 @@ class PrefixCache {
+         auto ent = entries_.find(id);
+         if (ent == entries_.end()) continue;
+         if (ent->second.identity != identity || ent->second.tokens.size() != len ||
++            (len == tokens.size() && !ent->second.resume_exact) ||
+             !std::equal(ent->second.tokens.begin(), ent->second.tokens.end(), tokens.begin()))
+           continue;
+         if (len >= best_len) {
+@@ -104,7 +105,7 @@ class PrefixCache {
+   }
+ 
+   bool put(const std::string &identity, const std::vector<int32_t> &tokens,
+-           std::shared_ptr<void> snapshot, uint64_t bytes, std::string *reason = nullptr) {
++           std::shared_ptr<void> snapshot, uint64_t bytes, std::string *reason = nullptr, bool resume_exact = true) {
+     std::lock_guard<std::mutex> g(mu_);
+     if (!cfg_.enabled || cfg_.budget_bytes == 0) {
+       if (reason) *reason = "disabled";
+@@ -114,7 +115,7 @@ class PrefixCache {
+       if (reason) *reason = "too_short";
+       return false;
+     }
+-    if (bytes > cfg_.budget_bytes) {
++    if (!snapshot || bytes == 0 || bytes > cfg_.budget_bytes) {
+       metrics_.last_reason = "oversize";
+       if (reason) *reason = "oversize";
+       return false;
+@@ -123,28 +124,20 @@ class PrefixCache {
+     uint64_t h2 = kMixOffset;
+     for (int32_t tok : tokens) mix_token(tok, h1, h2);
+     Key key{identity, tokens.size(), h1, h2};
+-    auto &bucket = index_[key];
+-    for (uint64_t id : bucket) {
+-      auto it = entries_.find(id);
+-      if (it == entries_.end()) continue;
+-      if (it->second.identity == identity && it->second.tokens == tokens) {
+-        bytes_ -= it->second.bytes;
+-        it->second.snapshot = std::move(snapshot);
+-        it->second.bytes = bytes;
+-        bytes_ += bytes;
+-        touch_locked(it->second);
+-        if (reason) *reason = "updated";
+-        return true;
++    // Remove an existing entry before admitting its replacement: a larger
++    // replacement must evict too. Do not retain an index bucket reference
++    // across eviction (erasing its last entry invalidates that reference).
++    if (auto found = index_.find(key); found != index_.end()) {
++      for (uint64_t id : found->second) {
++        auto it = entries_.find(id);
++        if (it != entries_.end() && it->second.tokens == tokens) {
++          erase_locked(id);
++          break;
++        }
+       }
+     }
+-    while (bytes_ + bytes > cfg_.budget_bytes && !lru_.empty()) {
+-      const uint64_t old = lru_.back();
+-      lru_.pop_back();
+-      auto it = entries_.find(old);
+-      if (it == entries_.end()) continue;
+-      remove_from_index_locked(it->second);
+-      bytes_ -= it->second.bytes;
+-      entries_.erase(it);
++    while (bytes > cfg_.budget_bytes - bytes_ && !lru_.empty()) {
++      erase_locked(lru_.back());
+       ++metrics_.evictions;
+     }
+     Entry ent;
+@@ -155,15 +148,30 @@ class PrefixCache {
+     ent.h2 = h2;
+     ent.snapshot = std::move(snapshot);
+     ent.bytes = bytes;
++    ent.resume_exact = resume_exact;
+     lru_.push_front(ent.id);
+     ent.lru = lru_.begin();
+     bytes_ += bytes;
+-    bucket.push_back(ent.id);
++    index_[key].push_back(ent.id);
+     entries_.emplace(ent.id, std::move(ent));
+     if (reason) *reason = "stored";
+     return true;
+   }
+ 
++  bool eligible(size_t tokens, uint64_t bytes) const {
++    std::lock_guard<std::mutex> g(mu_);
++    return cfg_.enabled && tokens >= cfg_.min_prefix_tokens &&
++           bytes > 0 && bytes <= cfg_.budget_bytes;
++  }
++
++  bool evict_one() {
++    std::lock_guard<std::mutex> g(mu_);
++    if (lru_.empty()) return false;
++    erase_locked(lru_.back());
++    ++metrics_.evictions;
++    return true;
++  }
++
+   void set_last_prefill_tokens(size_t n) {
+     std::lock_guard<std::mutex> g(mu_);
+     metrics_.last_prefill_tokens = n;
+@@ -221,6 +229,7 @@ class PrefixCache {
+     uint64_t h2 = 0;
+     std::shared_ptr<void> snapshot;
+     uint64_t bytes = 0;
++    bool resume_exact = true;
+     std::list<uint64_t>::iterator lru;
+   };
+ 
+@@ -251,6 +260,15 @@ class PrefixCache {
+     if (v.empty()) index_.erase(it);
+   }
+ 
++  void erase_locked(uint64_t id) {
++    auto it = entries_.find(id);
++    if (it == entries_.end()) return;
++    remove_from_index_locked(it->second);
++    bytes_ -= it->second.bytes;
++    lru_.erase(it->second.lru);
++    entries_.erase(it);
++  }
++
+   mutable std::mutex mu_;
+   PrefixCacheConfig cfg_;
+   uint64_t next_id_ = 1;

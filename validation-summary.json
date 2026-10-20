@@ -1,0 +1,42 @@
+{
+  "target": "Mac, 8 GiB inference budget",
+  "base_revision": "85b2a03b2a05f66a6526ff904e820dfb3509a7d9",
+  "native_sanitizer_tests": "passed",
+  "syntax_checks": [
+    {
+      "file": "abiface.cpp",
+      "passed": true,
+      "diagnostics": ""
+    },
+    {
+      "file": "expertio.cpp",
+      "passed": true,
+      "diagnostics": "results/edge0-kindi-worktree/macos/crates/engine-native/src/expertio.cpp: In member function \u2018void e0n::ExpertIo::ShardMaps::seq_read(const string&)\u2019:\nresults/edge0-kindi-worktree/macos/crates/engine-native/src/expertio.cpp:90:12: warning: compound assignment with \u2018volatile\u2019-qualified left operand is deprecated [-Wvolatile]\n   90 |       sink += v;\n      |       ~~~~~^~~~\n"
+    },
+    {
+      "file": "net35.cpp",
+      "passed": true,
+      "diagnostics": ""
+    },
+    {
+      "file": "net8b.cpp",
+      "passed": true,
+      "diagnostics": ""
+    }
+  ],
+  "pristine_patch_application": "passed",
+  "metal_inference": "not run",
+  "speedup": "unmeasured",
+  "total_8g_memory": "unverified on target Mac",
+  "persistent_ssd_prompt_snapshots": "not implemented",
+  "files": {
+    "README.md": "9f359969a965f093e7151225f0f04f3627b52bdc7e418860674706a898884562",
+    "apply.py": "50fd94ed65e366fb9f2e7f6ce5611f965fb7c3d5cbbced0219c0e4d1026bca81",
+    "edge0-kindi.patch": "dac31fad20c6f569a6daf78ba6aa799b45e89e8d4ef5bca2bb71ac9fb9ef851d",
+    "test.sh": "e769530a1eb7ec376af8620bfdc740270c175b45bbca52214621a8ca2be56e29",
+    "test_native.cpp": "e077b31d43d28f78b9e67cfb8450c1603116d51692fa976e9ba0525add78bbf4",
+    "verify_mac.py": "f114c1bf340737ee4e84612c35f24b8b95a844357ff2729328f0bf4680fd4bed",
+    "test_timing.py": "166c90752ab5df54fef3ed91210f7bde674f068520e2ba60506681bf46ea6ba0"
+  },
+  "distribution_note": "README adapted for the public repository; runtime patch unchanged."
+}

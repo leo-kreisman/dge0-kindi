@@ -1,0 +1,9 @@
+{
+  "inference_executed": false,
+  "reason": "The patched native backend requires Apple Metal; the current host is Linux/NVIDIA.",
+  "tokens_per_second": null,
+  "timing_unit_tests_passed": 3,
+  "native_sanitizer_tests": "passed",
+  "measurement_command_extra_args": "--max-new-tokens 64 --timeout 600",
+  "memory_limit_caveat": "7.5 GiB sampled RSS watchdog, not an OS hard cap"
+}
