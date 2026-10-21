@@ -82,3 +82,11 @@ Run a separate comparison with `--overlap-prefill` only after the default path p
 Start longer-context testing at `--prompt-tokens 16384` only after short tests fit. There is no validated 128K context claim under this budget. Next run actual coding tasks and compare correct patches, test results, total time, cache reuse and system pressure. Do not infer professional coding quality from the synthetic timing fixture.
 
 Keep the current working model installation available until the pilot passes. This walkthrough does not install a background server or configure OMP/OpenCode. Agent integration follows verified runtime behavior, and persistent prompt snapshots across process restarts remain future work.
+
+## Optional adaptive residency and restart profiles
+
+After the existing checks pass, add `--adaptive-cache` to the speed command to
+compare frequency-based expert retention against LRU. Run `--profile-restart`
+separately to validate saved usage hints in a fresh process. Use the current Git
+checkout and a fresh patched upstream checkout; the v0.2 ZIP predates these options.
+See [the detailed experiment record](docs/strata-adaptive-residency.md).

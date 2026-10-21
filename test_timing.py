@@ -32,6 +32,22 @@ class TimingTests(unittest.TestCase):
             run=self.run_fixture(); mutate(run)
             self.assertFalse(all(check_modes(run).values()))
 
+    def test_adaptive_and_restart_require_telemetry(self):
+        run=self.run_fixture()
+        for mode,loaded in [('adaptive',0),('profiled',12)]:
+            run[mode]=copy.deepcopy(run['cached'])
+            for row in run[mode]['rows']:
+                row['stats']['expert_residency']={'enabled':True,'observations':20,'loaded_entries':loaded}
+        self.assertTrue(all(check_modes(run).values()))
+        for mode in ('adaptive','profiled'):
+            bad=copy.deepcopy(run)
+            del bad[mode]['rows'][0]['stats']['expert_residency']
+            self.assertFalse(all(check_modes(bad).values()))
+        bad=copy.deepcopy(run)
+        for row in bad['profiled']['rows']:
+            row['stats']['expert_residency']['loaded_entries']=0
+        self.assertFalse(all(check_modes(bad).values()))
+
     def test_prefill_and_terminal_cleanup_excluded_from_decode(self):
         result = timing_metrics(10, [20, 20.5, 21], 22)
         self.assertEqual(result['decode_tokens_per_second'], 2)

@@ -6,3 +6,5 @@ Modifications: shared budget admission, prefix checkpoints, cache/stream fixes, 
 Kindi design reference: https://github.com/ahtx/kindi
 No Kindi model weights or CUDA implementation are included.
 Unofficial experimental integration; no upstream endorsement claimed.
+
+Adaptive residency and restart usage profiles: original implementation informed by Strata (https://github.com/Niko1221/Strata), inspected revision 9de04cd44e927a9a3df6bbc0e94fc1be8b844ba4. No Strata source or kernels included.

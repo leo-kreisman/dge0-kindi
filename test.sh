@@ -25,3 +25,7 @@ fi
 "${CXX:-c++}" -std=c++20 -O1 -g -fsanitize=address,undefined \
   -I"$json_include" -I"$source_dir" "$script_dir/test_packed.cpp" -o "$build_dir/test_packed"
 python3 "$script_dir/test_pack_experts.py" "$build_dir/test_packed"
+
+"${CXX:-c++}" -std=c++20 -O0 -g1 -pthread -fsanitize=address,undefined \
+  -I"$json_include" -I"$source_dir" "$script_dir/test_residency.cpp" -o "$build_dir/test_residency"
+"$build_dir/test_residency"

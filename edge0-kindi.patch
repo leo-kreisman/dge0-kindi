@@ -20,7 +20,7 @@ index 6d3861f..f1013f4 100644
  	rm -f $(ENGINE_OUT)/libedge0_engine_native.dylib $(ENGINE_OUT)/libmlx.dylib
  	cp -f $(ENGINE_BUILD)/out/libedge0_engine_native.dylib $(ENGINE_OUT)/
 diff --git a/macos/crates/engine-native/src/abiface.cpp b/macos/crates/engine-native/src/abiface.cpp
-index b9423bd..e37a704 100644
+index b9423bd..1d22f97 100644
 --- a/macos/crates/engine-native/src/abiface.cpp
 +++ b/macos/crates/engine-native/src/abiface.cpp
 @@ -24,6 +24,8 @@
@@ -150,7 +150,7 @@ index b9423bd..e37a704 100644
      auto cj = nlohmann::json::parse(h->config_json, nullptr, false);
      if (!cj.is_discarded() && cj.contains("forward") && cj["forward"].is_string()) {
        const std::string fwd = cj["forward"].get<std::string>();
-@@ -441,6 +500,33 @@ E0Engine *e0_engine_create(const char *tier_id, const char *model_dir,
+@@ -441,6 +500,37 @@ E0Engine *e0_engine_create(const char *tier_id, const char *model_dir,
      delete h;
      return nullptr;
    }
@@ -161,11 +161,15 @@ index b9423bd..e37a704 100644
 +    const bool batch=io_cfg.value("batch_materialize",true);
 +    if (h->net35) {
 +      h->net35->set_budget(h->joint_budget);
++      h->net35->configure_residency(io_cfg.value("adaptive_cache",false),
++          io_cfg.value("profile_path",std::string{}), h->model_dir);
 +      h->net35->configure_io(packed_dir,batch,io_cfg.value("overlap_prefill",false));
 +      h->net35->memory_guard = [h] { guard_memory(h); };
 +    }
 +    if (h->net8b) {
 +      h->net8b->set_budget(h->joint_budget);
++      h->net8b->configure_residency(io_cfg.value("adaptive_cache",false),
++          io_cfg.value("profile_path",std::string{}), h->model_dir);
 +      h->net8b->configure_io(packed_dir,batch);
 +      h->net8b->memory_guard = [h] { guard_memory(h); };
 +    }
@@ -184,7 +188,7 @@ index b9423bd..e37a704 100644
    return pool_new(g_engines, h);
  }
  
-@@ -530,6 +616,12 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
+@@ -530,6 +620,12 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
      if (hit.snapshot) {
        try {
          auto snap = std::static_pointer_cast<CachedState35>(hit.snapshot);
@@ -197,7 +201,7 @@ index b9423bd..e37a704 100644
          restore_state35(*h->st35, snap->state);
          cached_tokens = hit.matched_tokens;
          prefill_prompt.assign(prompt.begin() + static_cast<std::ptrdiff_t>(cached_tokens), prompt.end());
-@@ -553,8 +645,7 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
+@@ -553,8 +649,7 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
      }
      ns->set_on_prefill([h](const std::vector<int32_t> &full, const std::vector<float> &logits) {
        try {
@@ -207,7 +211,7 @@ index b9423bd..e37a704 100644
        } catch (const std::exception &e) {
          h->last_error = std::string("{\"error\":\"E-INTERNAL\",\"message\":\"") +
                          esc(e.what()) + "\"}";
-@@ -562,8 +653,7 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
+@@ -562,8 +657,7 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
      });
      ns->set_on_complete([h](const std::vector<int32_t> &full, const std::vector<float> &logits) {
        try {
@@ -217,7 +221,7 @@ index b9423bd..e37a704 100644
        } catch (const std::exception &e) {
          h->last_error = std::string("{\"error\":\"E-INTERNAL\",\"message\":\"") +
                          esc(e.what()) + "\"}";
-@@ -574,6 +664,12 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
+@@ -574,6 +668,12 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
      if (hit.snapshot) {
        try {
          auto snap = std::static_pointer_cast<CachedState8>(hit.snapshot);
@@ -230,7 +234,7 @@ index b9423bd..e37a704 100644
          restore_state8(*h->st8b, snap->state);
          cached_tokens = hit.matched_tokens;
          prefill_prompt.assign(prompt.begin() + static_cast<std::ptrdiff_t>(cached_tokens), prompt.end());
-@@ -597,8 +693,7 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
+@@ -597,8 +697,7 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
      }
      ns->set_on_prefill([h](const std::vector<int32_t> &full, const std::vector<float> &logits) {
        try {
@@ -240,7 +244,7 @@ index b9423bd..e37a704 100644
        } catch (const std::exception &e) {
          h->last_error = std::string("{\"error\":\"E-INTERNAL\",\"message\":\"") +
                          esc(e.what()) + "\"}";
-@@ -606,14 +701,36 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
+@@ -606,14 +705,36 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
      });
      ns->set_on_complete([h](const std::vector<int32_t> &full, const std::vector<float> &logits) {
        try {
@@ -279,7 +283,7 @@ index b9423bd..e37a704 100644
    h->prefix_cache->set_last_prefill_tokens(prompt_len - cached_tokens);
    if (h->active) h->active->seal();
    h->active = ns;
-@@ -641,7 +758,13 @@ E0Status e0_next(E0Engine *h, E0Stream *stream, E0TokenOut *out) {
+@@ -641,7 +762,13 @@ E0Status e0_next(E0Engine *h, E0Stream *stream, E0TokenOut *out) {
      out->flags = 0;
    }
    int32_t tok = 0;
@@ -294,7 +298,7 @@ index b9423bd..e37a704 100644
    if (got) {
      if (out) out->token = tok;
      return E0_NOTIFIED;
-@@ -655,9 +778,10 @@ E0Status e0_next(E0Engine *h, E0Stream *stream, E0TokenOut *out) {
+@@ -655,9 +782,10 @@ E0Status e0_next(E0Engine *h, E0Stream *stream, E0TokenOut *out) {
        st->owner()->has_recs = true;
        if (errored) {
          st->owner()->last_error =
@@ -307,7 +311,7 @@ index b9423bd..e37a704 100644
        }
      }
    }
-@@ -714,8 +838,20 @@ E0Status e0_stats(E0Engine *h, char *buf, size_t buf_len, size_t *written) {
+@@ -714,8 +842,24 @@ E0Status e0_stats(E0Engine *h, char *buf, size_t buf_len, size_t *written) {
                         ",\"last_cached_tokens\":" + std::to_string(pc.last_cached_tokens) +
                         ",\"last_prefill_tokens\":" + std::to_string(pc.last_prefill_tokens) +
                         ",\"last_reason\":\"" + esc(pc.last_reason) + "\"}";
@@ -318,6 +322,10 @@ index b9423bd..e37a704 100644
 +      {"materialize_calls",c.materialize_calls},
 +      {"prefetch_submitted",c.prefetch_submitted},{"prefetch_hits",c.prefetch_hits},
 +      {"prefetch_wasted",c.prefetch_wasted}}).dump();
++  const std::string residency = ",\"expert_residency\":" + nlohmann::json({
++      {"enabled",c.residency.enabled},{"observations",c.residency.observations},
++      {"adaptive_evictions",c.residency.adaptive_evictions},
++      {"loaded_entries",c.residency.loaded}}).dump();
 +  const std::string joint = ",\"joint_budget\":" + nlohmann::json({
 +      {"managed_limit_bytes", jm.limit}, {"managed_live_bytes", jm.live},
 +      {"managed_peak_bytes", jm.peak}, {"rejections", jm.rejected},
@@ -325,12 +333,219 @@ index b9423bd..e37a704 100644
 +      {"os_enforced", false}}).dump();
    std::string json =
 -      route + diag + prefix + ",\"loaded_experts\":" + std::to_string(c.loads) +
-+      route + diag + prefix + joint + io + ",\"loaded_experts\":" + std::to_string(c.loads) +
++      route + diag + prefix + joint + io + residency + ",\"loaded_experts\":" + std::to_string(c.loads) +
        ",\"cache_hits\":" + std::to_string(c.hits) +
        ",\"cache_misses\":" + std::to_string(c.misses) +
        ",\"cache_evictions\":" + std::to_string(c.evictions) +
+diff --git a/macos/crates/engine-native/src/expert_residency.hpp b/macos/crates/engine-native/src/expert_residency.hpp
+new file mode 100644
+index 0000000..2f0513c
+--- /dev/null
++++ b/macos/crates/engine-native/src/expert_residency.hpp
+@@ -0,0 +1,201 @@
++// Bounded demand-frequency residency with optional restart hints. No model training.
++// Original implementation inspired by Strata's decayed usage/ranked-profile design.
++#pragma once
++#include <algorithm>
++#include <atomic>
++#include <cmath>
++#include <cerrno>
++#include <cstdio>
++#include <cstdlib>
++#include <cstdint>
++#include <deque>
++#include <filesystem>
++#include <fstream>
++#include <map>
++#include <memory>
++#include <mutex>
++#include <set>
++#include <stdexcept>
++#include <string>
++#include <vector>
++#include <nlohmann/json.hpp>
++#include <sys/stat.h>
++#include <fcntl.h>
++#include <unistd.h>
++
++namespace e0n {
++// Metadata identity, not a cryptographic content hash. Includes adapters/configs
++// alongside shards. Replacing, relocating or touching files invalidates the hint.
++inline std::string residency_identity(const std::string &dir) {
++  namespace fs = std::filesystem;
++  nlohmann::json files = nlohmann::json::object();
++  auto root = fs::canonical(dir);
++  for (const auto &entry : fs::directory_iterator(root)) {
++    if (!entry.is_regular_file()) continue;
++    struct stat st{};
++    if (::stat(entry.path().c_str(), &st)) throw std::runtime_error("profile source stat failed");
++#ifdef __APPLE__
++    auto ns = st.st_mtimespec.tv_nsec;
++#else
++    auto ns = st.st_mtim.tv_nsec;
++#endif
++    files[entry.path().filename().string()] = {st.st_size, st.st_mtime, ns};
++    if (files.size() > 512) throw std::runtime_error("too many profile source files");
++  }
++  std::string identity = nlohmann::json({{"root",root.string()}, {"files",files},
++                                       {"runtime","edge0-85b2a03-residency-v1"}}).dump();
++  if (identity.size() > 65536) throw std::runtime_error("oversize profile identity");
++  return identity;
++}
++
++template<class T> class ExpertResidency {
++ public:
++  explicit ExpertResidency(int slots) : slots_(slots) {}
++  struct Metrics { uint64_t observations=0, adaptive_evictions=0, loaded=0; bool enabled=false; };
++  // Before workers start. A bad explicit profile is rejected without partial import.
++  void configure(bool enabled, const std::map<int,int> &layout,
++                 const std::string &identity, const std::string &path) {
++    if (!enabled && !path.empty()) throw std::runtime_error("profile requires adaptive cache");
++    if (!enabled) return;
++    if (identity.size() > 65536) throw std::runtime_error("oversize identity");
++    std::map<int,Layer> next;
++    size_t total=0;
++    for (auto [li,n] : layout) {
++      if (li<0 || li>65535 || n<1 || n>4096 || (total+=n)>65536)
++        throw std::runtime_error("invalid profile layout");
++      next[li].heat.resize(n);
++    }
++    if (next.empty()) throw std::runtime_error("empty profile layout");
++    uint64_t loaded=0;
++    if (!path.empty() && std::filesystem::exists(path)) {
++      if (!std::filesystem::is_regular_file(path) || std::filesystem::file_size(path)>1048576)
++        throw std::runtime_error("invalid profile file size/type");
++      std::ifstream in(path, std::ios::binary);
++      // Bound the read too: a file growing after file_size must not allocate freely.
++      std::string data(1048577, '\0'); in.read(data.data(),data.size()); data.resize(in.gcount());
++      if (data.size()>1048576) throw std::runtime_error("profile grew beyond limit");
++      nlohmann::json j=nlohmann::json::parse(data, [](int depth,nlohmann::json::parse_event_t,nlohmann::json&){
++        if(depth>8) throw std::runtime_error("profile nesting too deep"); return true;
++      });
++      if (j.at("version")!=1 || j.at("identity")!=identity || j.at("layout")!=layout_json(layout) ||
++          !j.at("heat").is_array() || j.at("heat").size()>total)
++        throw std::runtime_error("incompatible expert profile");
++      std::set<uint64_t> seen;
++      for (const auto &v:j.at("heat")) {
++        if (!v.is_array() || v.size()!=3 || !v[0].is_number_integer() || !v[1].is_number_integer() || !v[2].is_number())
++          throw std::runtime_error("invalid profile row");
++        auto li=v[0].get<int64_t>(), e=v[1].get<int64_t>(); double score=v[2].get<double>();
++        if(li<0 || li>65535 || !next.count(int(li)) || e<0 || e>=int64_t(next.at(int(li)).heat.size()) ||
++           !std::isfinite(score) || score<=0 || score>128 || !seen.insert(key(int(li),e)).second)
++          throw std::runtime_error("invalid profile expert/score");
++        next.at(int(li)).heat[size_t(e)]={score,0}; ++loaded;
++      }
++    }
++    std::lock_guard<std::mutex> lock(mu_);
++    layers_=std::move(next); identity_=identity; path_=path; layout_=layout;
++    enabled_=true; loaded_=loaded;
++  }
++  // Only consumed decode routes call this, including actual prerouter selections.
++  // Prefill, guessed future routes and loading/cache hits never inflate scores.
++  void observe(int li,const std::vector<int64_t> &experts) {
++    std::lock_guard<std::mutex> lock(mu_);
++    if (!enabled_) return;
++    auto it=layers_.find(li);
++    if(it==layers_.end()) throw std::runtime_error("unknown observed layer");
++    auto &l=it->second;
++    std::set<int64_t> unique(experts.begin(),experts.end());
++    for(auto e:unique) if(e<0 || e>=int64_t(l.heat.size())) throw std::runtime_error("invalid observed expert");
++    ++l.tick;
++    for(auto e:unique) {
++      auto &h=l.heat[size_t(e)]; h={std::min(128.0,value(h,l.tick)+1.0),l.tick}; ++observations_;
++    }
++  }
++  std::shared_ptr<T> get(uint64_t k) {
++    std::lock_guard<std::mutex> lock(mu_); auto it=map_.find(k);
++    if(it==map_.end()) return nullptr;
++    touch(k); return it->second;
++  }
++  std::shared_ptr<T> peek(uint64_t k) {
++    std::lock_guard<std::mutex> lock(mu_); auto it=map_.find(k);
++    return it==map_.end()?nullptr:it->second;
++  }
++  void put(uint64_t k,std::shared_ptr<T> b) {
++    std::lock_guard<std::mutex> lock(mu_);
++    bool present=map_.count(k); map_[k]=std::move(b);
++    if(present) touch(k); else order_.push_back(k);
++    while(slots_>0 && map_.size()>size_t(slots_)) evict_locked();
++  }
++  std::shared_ptr<T> pop(uint64_t k) {
++    std::lock_guard<std::mutex> lock(mu_); auto it=map_.find(k);
++    if(it==map_.end()) return nullptr;
++    auto b=it->second; map_.erase(it); erase_order(k); return b;
++  }
++  bool contains(uint64_t k) { return bool(peek(k)); }
++  bool evict_one() { std::lock_guard<std::mutex> lock(mu_); return evict_locked(); }
++  size_t size() { std::lock_guard<std::mutex> lock(mu_); return map_.size(); }
++  uint64_t evictions() const { return evictions_.load(); }
++  Metrics metrics() const {
++    std::lock_guard<std::mutex> lock(mu_); return {observations_,adaptive_evictions_,loaded_,enabled_};
++  }
++  // Explicit/graceful shutdown only; no writes on the generation hot path.
++  // Unique temp + atomic rename: readers see either complete old or new JSON.
++  void save() const {
++    nlohmann::json j; std::string path;
++    {
++      std::lock_guard<std::mutex> lock(mu_);
++      if(!enabled_ || path_.empty() || !observations_) return;
++      path=path_; j={{"version",1},{"identity",identity_},{"layout",layout_json(layout_)},
++                    {"heat",nlohmann::json::array()}};
++      for(const auto &[li,l]:layers_) for(size_t e=0;e<l.heat.size();++e) {
++        double h=value(l.heat[e],l.tick);
++        if(h>=0.001) j["heat"].push_back({li,e,h});
++      }
++    }
++    std::string data=j.dump();
++    if(data.size()>1048576) throw std::runtime_error("profile exceeds file limit");
++    std::string tmp=path+".tmp.XXXXXX";
++    int fd=::mkstemp(tmp.data());
++    if(fd<0) throw std::runtime_error("cannot create expert profile temporary file");
++    bool ok=true; size_t off=0;
++    while(off<data.size()) {
++      auto n=::write(fd,data.data()+off,data.size()-off);
++      if(n<0 && errno==EINTR) continue;
++      if(n<=0) {ok=false; break;} off+=size_t(n);
++    }
++    if(ok && ::fsync(fd)) ok=false;
++    if(::close(fd)) ok=false;
++    if(ok && ::rename(tmp.c_str(),path.c_str())) ok=false;
++    if(!ok) {::unlink(tmp.c_str()); throw std::runtime_error("cannot save expert profile");}
++  }
++ private:
++  struct Heat {double score=0; uint64_t tick=0;};
++  struct Layer {uint64_t tick=0; std::vector<Heat> heat;};
++  static uint64_t key(int li,int64_t e) {return uint64_t(li)<<32 | uint64_t(e);}
++  static double value(const Heat &h,uint64_t tick) {return h.score*std::exp2(-double(tick-h.tick)/64.0);}
++  static nlohmann::json layout_json(const std::map<int,int> &layout) {
++    auto j=nlohmann::json::array(); for(auto [li,n]:layout) j.push_back({li,n}); return j;
++  }
++  double score(uint64_t k) const {
++    auto it=layers_.find(int(k>>32)); auto e=uint32_t(k);
++    if(it==layers_.end() || e>=it->second.heat.size()) return 0;
++    return value(it->second.heat[e],it->second.tick);
++  }
++  void erase_order(uint64_t k) {auto it=std::find(order_.begin(),order_.end(),k); if(it!=order_.end()) order_.erase(it);}
++  void touch(uint64_t k) {erase_order(k); order_.push_back(k);}
++  bool evict_locked() {
++    if(order_.empty()) return false;
++    auto victim=order_.begin();
++    if(enabled_) {
++      for(auto it=order_.begin();it!=order_.end();++it) if(score(*it)<score(*victim)) victim=it;
++      ++adaptive_evictions_;
++    }
++    auto k=*victim; order_.erase(victim); map_.erase(k); ++evictions_; return true;
++  }
++  int slots_; mutable std::mutex mu_; std::deque<uint64_t> order_;
++  std::map<uint64_t,std::shared_ptr<T>> map_;
++  std::map<int,Layer> layers_; std::map<int,int> layout_;
++  std::string identity_,path_; bool enabled_=false;
++  uint64_t observations_=0,adaptive_evictions_=0,loaded_=0;
++  std::atomic<uint64_t> evictions_{0};
++};
++} // namespace e0n
 diff --git a/macos/crates/engine-native/src/expertio.cpp b/macos/crates/engine-native/src/expertio.cpp
-index a7516f3..f3360c5 100644
+index a7516f3..bc83109 100644
 --- a/macos/crates/engine-native/src/expertio.cpp
 +++ b/macos/crates/engine-native/src/expertio.cpp
 @@ -47,7 +47,7 @@ const uint8_t *ExpertIo::ShardMaps::raw(const std::string &shard_path, uint64_t
@@ -342,23 +557,63 @@ index a7516f3..f3360c5 100644
    return base + off;
  }
  
-@@ -137,6 +137,15 @@ size_t SharedExpertCache::size() {
-   std::lock_guard<std::mutex> lk(mu_);
-   return map_.size();
+@@ -93,55 +93,6 @@ void ExpertIo::ShardMaps::seq_read(const std::string &shard_path) {
+   (void)sink;
  }
-+bool SharedExpertCache::evict_one() {
-+  std::lock_guard<std::mutex> lk(mu_);
-+  if (order_.empty()) return false;
-+  const auto key = order_.front();
-+  order_.pop_front();
-+  map_.erase(key);
-+  ++evictions_;
-+  return true;
-+}
- bool SharedExpertCache::contains(uint64_t key) {
+ 
+-std::shared_ptr<Bundle> SharedExpertCache::get(uint64_t key) {  // cache.py:24-29
+-  std::lock_guard<std::mutex> lk(mu_);
+-  auto it = map_.find(key);
+-  if (it == map_.end()) return nullptr;
+-  for (auto o = order_.begin(); o != order_.end(); ++o)
+-    if (*o == key) { order_.erase(o); order_.push_back(key); break; }
+-  return it->second;
+-}
+-std::shared_ptr<Bundle> SharedExpertCache::peek(uint64_t key) {  // 31-33
+-  std::lock_guard<std::mutex> lk(mu_);
+-  auto it = map_.find(key);
+-  return it == map_.end() ? nullptr : it->second;
+-}
+-void SharedExpertCache::put(uint64_t key, std::shared_ptr<Bundle> b) {  // 34-39
+-  std::lock_guard<std::mutex> lk(mu_);
+-  if (map_.count(key)) {
+-    map_[key] = std::move(b);
+-    for (auto o = order_.begin(); o != order_.end(); ++o)
+-      if (*o == key) { order_.erase(o); order_.push_back(key); break; }
+-    return;
+-  }
+-  map_[key] = std::move(b);
+-  order_.push_back(key);
+-  if (slots_ > 0 && int(map_.size()) > slots_) {  // popitem(last=False)
+-    uint64_t old = order_.front();
+-    order_.pop_front();
+-    map_.erase(old);
+-    evictions_++;
+-  }
+-}
+-std::shared_ptr<Bundle> SharedExpertCache::pop(uint64_t key) {  // 41-46
+-  std::lock_guard<std::mutex> lk(mu_);
+-  auto it = map_.find(key);
+-  if (it == map_.end()) return nullptr;
+-  auto b = it->second;
+-  map_.erase(it);
+-  for (auto o = order_.begin(); o != order_.end(); ++o)
+-    if (*o == key) { order_.erase(o); break; }
+-  return b;
+-}
+-size_t SharedExpertCache::size() {
+-  std::lock_guard<std::mutex> lk(mu_);
+-  return map_.size();
+-}
+-bool SharedExpertCache::contains(uint64_t key) {
+-  std::lock_guard<std::mutex> lk(mu_);
+-  return map_.count(key) > 0;
+-}
+-
+ bool PrefetchBuffer::put(uint64_t key, std::shared_ptr<Bundle> b) {  // cache.py:66-72
    std::lock_guard<std::mutex> lk(mu_);
-   return map_.count(key) > 0;
-@@ -165,6 +174,15 @@ std::shared_ptr<Bundle> PrefetchBuffer::pop(uint64_t key) {  // 74-75
+   if (map_.count(key)) { map_[key] = std::move(b); return true; }
+@@ -165,6 +116,15 @@ std::shared_ptr<Bundle> PrefetchBuffer::pop(uint64_t key) {  // 74-75
      if (*o == key) { order_.erase(o); break; }
    return b;
  }
@@ -374,7 +629,7 @@ index a7516f3..f3360c5 100644
  bool PrefetchBuffer::contains(uint64_t key) {
    std::lock_guard<std::mutex> lk(mu_);
    return map_.count(key) > 0;
-@@ -188,7 +206,8 @@ IoPool::IoPool(int n) {
+@@ -188,7 +148,8 @@ IoPool::IoPool(int n) {
        }
      });
  }
@@ -384,7 +639,7 @@ index a7516f3..f3360c5 100644
    {
      std::lock_guard<std::mutex> lk(mu_);
      stop_ = true;
-@@ -205,6 +224,13 @@ ExpertIo::ExpertIo(const ModelFiles *files, int cache_slots, int prefetch_cap, i
+@@ -205,6 +166,15 @@ ExpertIo::ExpertIo(const ModelFiles *files, int cache_slots, int prefetch_cap, i
      : files_(files), cache_(cache_slots), pbuf_(prefetch_cap), load_pool_(load_threads),
        prefetch_pool_(prefetch_threads) {}
  
@@ -393,16 +648,35 @@ index a7516f3..f3360c5 100644
 +  // members are still alive, not during reverse-order member destruction.
 +  prefetch_pool_.shutdown();
 +  load_pool_.shutdown();
++  try { cache_.save(); }
++  catch (const std::exception &e) { std::fprintf(stderr,"expert profile save failed: %s\n",e.what()); }
 +}
 +
  namespace {
  void materialize(const std::shared_ptr<Bundle> &b) {
    std::vector<mx::array> v;
-@@ -245,17 +271,65 @@ int ExpertIo::layer_idx(int li) const {
+@@ -245,17 +215,82 @@ int ExpertIo::layer_idx(int li) const {
    return it == li2idx_.end() ? -1 : it->second;
  }
  
 -std::shared_ptr<Bundle> ExpertIo::build(int li, int64_t expert) {
++void ExpertIo::configure_residency(bool adaptive, const std::string &path,
++                                    const std::string &model_dir) {
++  if (!path.empty()) {
++    namespace fs = std::filesystem;
++    auto parent=fs::canonical(fs::path(path).parent_path().empty() ? fs::path(".") : fs::path(path).parent_path());
++    // Keeping hints outside the model avoids changing their own metadata identity.
++    const auto root=fs::canonical(model_dir);
++    auto relative=parent.lexically_relative(root);
++    if (relative.empty() || *relative.begin()!="..")
++      throw std::runtime_error("expert profile must be outside the model directory");
++    if (fs::is_symlink(path)) throw std::runtime_error("expert profile cannot be a symlink");
++  }
++  std::map<int,int> layout;
++  for(const auto &l:layers_) layout[l.cfg.layer]=static_cast<int>(l.cfg.E);
++  cache_.configure(adaptive,layout,adaptive ? residency_identity(model_dir) : "",path);
++}
++
 +void ExpertIo::configure_io(const std::string &packed_dir, bool batch_materialize) {
 +  batch_materialize_ = batch_materialize;
 +  if (packed_dir.empty()) return;
@@ -467,7 +741,7 @@ index a7516f3..f3360c5 100644
        if (!src) {
          std::fprintf(stderr, "expertio: raw out of range %s e%lld off=%llu per=%llu\n",
                       files_->shard_path(r.ti->shard).c_str(), (long long)expert,
-@@ -297,7 +371,8 @@ std::map<int64_t, std::shared_ptr<Bundle>> ExpertIo::get_bundles(
+@@ -297,7 +332,8 @@ std::map<int64_t, std::shared_ptr<Bundle>> ExpertIo::get_bundles(
    Layer *L = (lidx >= 0) ? &layers_[size_t(lidx)] : nullptr;
    const double decay = L ? L->cfg.hot_decay : 0.75;
  
@@ -477,7 +751,7 @@ index a7516f3..f3360c5 100644
      auto c = cache_.get(key_of(li, e));
      if (c) { out[e] = std::move(c); hits_++; }
      else missing.push_back(e);
-@@ -323,13 +398,14 @@ std::map<int64_t, std::shared_ptr<Bundle>> ExpertIo::get_bundles(
+@@ -323,13 +359,14 @@ std::map<int64_t, std::shared_ptr<Bundle>> ExpertIo::get_bundles(
        if (it != inflight_.end()) fut = it->second;
      }
      if (fut.valid()) {
@@ -494,7 +768,7 @@ index a7516f3..f3360c5 100644
          continue;
        }
        phi_++; hits_++;
-@@ -344,9 +420,7 @@ std::map<int64_t, std::shared_ptr<Bundle>> ExpertIo::get_bundles(
+@@ -344,9 +381,7 @@ std::map<int64_t, std::shared_ptr<Bundle>> ExpertIo::get_bundles(
      for (size_t i = 0; i < cold.size(); i++) {
        auto b = fs[i].get();
        if (!b) {
@@ -505,7 +779,7 @@ index a7516f3..f3360c5 100644
        }
        loads_++; misses_++;
        if (L) L->bump_count(cold[i], decay);
-@@ -354,7 +428,14 @@ std::map<int64_t, std::shared_ptr<Bundle>> ExpertIo::get_bundles(
+@@ -354,7 +389,14 @@ std::map<int64_t, std::shared_ptr<Bundle>> ExpertIo::get_bundles(
        out[cold[i]] = std::move(b);
      }
    }
@@ -521,7 +795,7 @@ index a7516f3..f3360c5 100644
    return out;
  }
  
-@@ -379,7 +460,7 @@ void ExpertIo::prefetch(int li, const std::vector<int64_t> &experts) {
+@@ -379,7 +421,7 @@ void ExpertIo::prefetch(int li, const std::vector<int64_t> &experts) {
    if (L.cfg.warm_willneed) warm_willneed(li, missing);  // 502-503
    std::vector<std::pair<int64_t, std::shared_future<std::shared_ptr<Bundle>>>> sub;
    for (auto e : missing) {
@@ -530,7 +804,7 @@ index a7516f3..f3360c5 100644
      {
        std::lock_guard<std::mutex> lk(infl_mu_);
        inflight_[key_of(li, e)] = fut;
-@@ -390,13 +471,14 @@ void ExpertIo::prefetch(int li, const std::vector<int64_t> &experts) {
+@@ -390,13 +432,14 @@ void ExpertIo::prefetch(int li, const std::vector<int64_t> &experts) {
    for (auto &[e, fut] : sub) {
      uint64_t key = key_of(li, e);
      prefetch_pool_.submit([this, e, key, fut] {
@@ -547,7 +821,7 @@ index a7516f3..f3360c5 100644
        if (!pbuf_.put(key, b)) pwaste_++;                  // 533-535
      });
    }
-@@ -406,6 +488,7 @@ void ExpertIo::warm_willneed(int li, const std::vector<int64_t> &experts) {
+@@ -406,6 +449,7 @@ void ExpertIo::warm_willneed(int li, const std::vector<int64_t> &experts) {
    int idx = layer_idx(li);
    if (idx < 0) return;
    Layer &L = layers_[size_t(idx)];
@@ -555,7 +829,7 @@ index a7516f3..f3360c5 100644
    for (auto e : experts)
      for (int i = 0; i < 9; i++) {
        if (!L.reg[i].ti) continue;
-@@ -518,17 +601,14 @@ void ExpertIo::stage_incr_locked(Layer &L, const std::vector<int64_t> &uniq) {
+@@ -518,17 +562,14 @@ void ExpertIo::stage_incr_locked(Layer &L, const std::vector<int64_t> &uniq) {
    for (auto e : exp) if (L.incr_bundles.count(e)) bundles[e] = L.incr_bundles[e];
    struct Write { int slot; std::shared_ptr<Bundle> b; };
    std::vector<Write> writes;
@@ -577,7 +851,7 @@ index a7516f3..f3360c5 100644
      bundles[e] = b;
      occ[slot] = e;
      writes.push_back({slot, std::move(b)});
-@@ -874,6 +954,11 @@ ExpertIo::Metrics ExpertIo::snapshot() const {
+@@ -874,6 +915,12 @@ ExpertIo::Metrics ExpertIo::snapshot() const {
    m.stage_builds = sbuilds_.load();
    m.heap_bytes = heap_->live.load();
    m.heap_peak = heap_->peak.load();
@@ -586,23 +860,25 @@ index a7516f3..f3360c5 100644
 +  m.packed_reads=packed_reads_.load();
 +  m.packed_bytes=packed_bytes_.load();
 +  m.materialize_calls=materialize_calls_.load();
++  m.residency = cache_.metrics();
    m.cache_size = const_cast<SharedExpertCache &>(cache_).size();
    m.inflight = inflight_size();
    return m;
 diff --git a/macos/crates/engine-native/src/expertio.hpp b/macos/crates/engine-native/src/expertio.hpp
-index 1f4d17e..8659e31 100644
+index 1f4d17e..e4894f2 100644
 --- a/macos/crates/engine-native/src/expertio.hpp
 +++ b/macos/crates/engine-native/src/expertio.hpp
-@@ -19,6 +19,8 @@
+@@ -19,6 +19,9 @@
  #include <mlx/mlx.h>
  
  #include "safio.hpp"
 +#include "joint_budget.hpp"
 +#include "packed_experts.hpp"
++#include "expert_residency.hpp"
  
  namespace e0n {
  namespace mx = mlx::core;
-@@ -27,6 +29,8 @@ namespace mx = mlx::core;
+@@ -27,6 +30,8 @@ namespace mx = mlx::core;
  // not file key order (gate_proj before up_proj). Shape is the stacked tensor
  // without the expert axis [O,K]; elements live in mlx-owned buffers.
  struct Bundle {
@@ -611,22 +887,33 @@ index 1f4d17e..8659e31 100644
    Bundle()
        : f{mx::array(0.f), mx::array(0.f), mx::array(0.f), mx::array(0.f), mx::array(0.f),
           mx::array(0.f), mx::array(0.f), mx::array(0.f), mx::array(0.f)} {}
-@@ -44,12 +48,13 @@ class SharedExpertCache {
-   void put(uint64_t key, std::shared_ptr<Bundle> b);
-   std::shared_ptr<Bundle> pop(uint64_t key);
-   bool contains(uint64_t key);
-+  bool evict_one();
-   size_t size();
-   uint64_t evictions() const { return evictions_; }
+@@ -36,24 +41,7 @@ struct Bundle {
+   mx::array &at_mut(int p) { return f[p]; }
+ };
  
-  private:
-   int slots_;
+-class SharedExpertCache {
+- public:
+-  explicit SharedExpertCache(int slots) : slots_(slots) {}
+-  std::shared_ptr<Bundle> get(uint64_t key);
+-  std::shared_ptr<Bundle> peek(uint64_t key);
+-  void put(uint64_t key, std::shared_ptr<Bundle> b);
+-  std::shared_ptr<Bundle> pop(uint64_t key);
+-  bool contains(uint64_t key);
+-  size_t size();
+-  uint64_t evictions() const { return evictions_; }
+-
+- private:
+-  int slots_;
 -  uint64_t evictions_ = 0;
-+  std::atomic<uint64_t> evictions_{0};
-   std::mutex mu_;
-   std::deque<uint64_t> order_;  // front = LRU
-   std::map<uint64_t, std::shared_ptr<Bundle>> map_;
-@@ -61,6 +66,7 @@ class PrefetchBuffer {
+-  std::mutex mu_;
+-  std::deque<uint64_t> order_;  // front = LRU
+-  std::map<uint64_t, std::shared_ptr<Bundle>> map_;
+-};
++using SharedExpertCache = ExpertResidency<Bundle>;
+ 
+ class PrefetchBuffer {
+  public:
+@@ -61,6 +49,7 @@ class PrefetchBuffer {
    bool put(uint64_t key, std::shared_ptr<Bundle> b);     // true = kept, false = overflow drop
    std::shared_ptr<Bundle> pop(uint64_t key);
    bool contains(uint64_t key);
@@ -634,7 +921,7 @@ index 1f4d17e..8659e31 100644
    void set_cap(int c) { cap_ = c; }
  
   private:
-@@ -74,6 +80,7 @@ class IoPool {
+@@ -74,6 +63,7 @@ class IoPool {
   public:
    explicit IoPool(int n);
    ~IoPool();
@@ -642,12 +929,14 @@ index 1f4d17e..8659e31 100644
    template <class F>
    auto submit(F &&f) -> std::shared_future<decltype(f())> {
      using R = decltype(f());
-@@ -118,9 +125,18 @@ class ExpertIo {
+@@ -118,9 +108,20 @@ class ExpertIo {
  
    ExpertIo(const ModelFiles *files, int cache_slots, int prefetch_cap, int load_threads,
             int prefetch_threads);
 +  ~ExpertIo();
    void add_layer(const LayerCfg &cfg);
++  void configure_residency(bool adaptive, const std::string &profile_path, const std::string &model_dir);
++  void observe_decode(int li, const std::vector<int64_t> &experts) { cache_.observe(li, experts); }
 +  void configure_io(const std::string &packed_dir, bool batch_materialize);
 +  void set_budget(std::shared_ptr<JointBudget> budget) {
 +    budget_ = std::move(budget);
@@ -662,16 +951,17 @@ index 1f4d17e..8659e31 100644
    // LRU → prefetch_buf.pop (promote) → wait inflight (promote) → pool sync + LRU.
    std::map<int64_t, std::shared_ptr<Bundle>> get_bundles(int li,
                                                           const std::vector<int64_t> &experts);
-@@ -178,6 +194,8 @@ class ExpertIo {
+@@ -178,6 +179,9 @@ class ExpertIo {
      uint64_t prefetch_submitted = 0, prefetch_hits = 0, prefetch_wasted = 0;
      uint64_t staged_used = 0, staged_fallback = 0, stage_builds = 0;
      uint64_t heap_bytes = 0, heap_peak = 0;
 +    uint64_t source_bytes = 0, source_regions = 0, packed_reads = 0, packed_bytes = 0;
 +    uint64_t materialize_calls = 0;
++    SharedExpertCache::Metrics residency;
      size_t cache_size = 0, inflight = 0;
    };
    Metrics snapshot() const;
-@@ -200,6 +218,7 @@ class ExpertIo {
+@@ -200,6 +204,7 @@ class ExpertIo {
        uint32_t esize = 4;          // element bytes (u32=4 / bf16=2)
      };
      Region reg[9];
@@ -679,7 +969,7 @@ index 1f4d17e..8659e31 100644
      std::unique_ptr<std::mutex> mu = std::make_unique<std::mutex>();
      StagedState state, next;
      std::deque<std::string> slot_keys;
-@@ -252,6 +271,8 @@ class ExpertIo {
+@@ -252,6 +257,8 @@ class ExpertIo {
      void sub(uint64_t b) { live.fetch_sub(b); }
    };
  
@@ -688,7 +978,7 @@ index 1f4d17e..8659e31 100644
    const ModelFiles *files_;
    struct ShardMaps {
      ~ShardMaps();
-@@ -274,6 +295,8 @@ class ExpertIo {
+@@ -274,6 +281,8 @@ class ExpertIo {
    std::shared_ptr<HeapAcc> heap_{std::make_shared<HeapAcc>()};
    std::atomic<uint64_t> loads_{0}, hits_{0}, misses_{0}, psub_{0}, phi_{0}, pwaste_{0},
        sused_{0}, sfallback_{0}, sbuilds_{0};
@@ -844,7 +1134,7 @@ index 0000000..defd933
 +};
 +} // namespace e0n
 diff --git a/macos/crates/engine-native/src/net35.cpp b/macos/crates/engine-native/src/net35.cpp
-index a4e499c..b01a91d 100644
+index a4e499c..eb4760b 100644
 --- a/macos/crates/engine-native/src/net35.cpp
 +++ b/macos/crates/engine-native/src/net35.cpp
 @@ -429,6 +429,7 @@ void Net35::reset_state(State35 &st) const {
@@ -855,7 +1145,23 @@ index a4e499c..b01a91d 100644
    const int64_t T = x.shape(1);
    const auto dt = x.dtype();
    const int64_t keyd = hk_ * dk_, vald = hv_ * dv_;
-@@ -1027,6 +1028,7 @@ bool Net35::prefill_batched_(const std::vector<int32_t> &tokens, State35 &st,
+@@ -611,6 +612,7 @@ bool Net35::layer_fwd(Layer &L, int li, mx::array &x, State35 &st, bool decode,
+       oh_cur_[static_cast<size_t>(li)] = topk_onehot(idx, E);
+     }
+     // mix+shared(install.py:190-194):(y*scores[...,None]).sum(-2) + sigmoid(egate(x))*shared(x)
++    io_->observe_decode(li, rec.sel.inds);
+     auto out = mx::sum(routed * mx::expand_dims(w, -1), std::vector<int>{-2}, false);
+     auto shg = e0n::lora::apply_lora(lo_.get(), L.sh_gate, m_in, li, e0n::lora::S35_SH_GATE);
+     auto shu = e0n::lora::apply_lora(lo_.get(), L.sh_up, m_in, li, e0n::lora::S35_SH_UP);
+@@ -756,6 +758,7 @@ bool Net35::layer_fwd(Layer &L, int li, mx::array &x, State35 &st, bool decode,
+   rec.layer = li;
+   rec.predicted = predicted;
+   rec.sel = sels[static_cast<size_t>(T - 1)];
++  if (decode && T == 1) io_->observe_decode(li, rec.sel.inds);
+   std::vector<float> last_row(mhost.begin() + (T - 1) * H_, mhost.end());
+   st.pr.capture(li, std::move(last_row), rec.sel.inds);
+ 
+@@ -1027,6 +1030,7 @@ bool Net35::prefill_batched_(const std::vector<int32_t> &tokens, State35 &st,
          return false;
        st.position += n;  // base.py:83 self.pos += len(chunk)
        if (!stage_all_gpu(st, err, nullptr)) return false;
@@ -863,7 +1169,7 @@ index a4e499c..b01a91d 100644
      }
      prefill_end_(st);
      logits_last = std::move(lg);
-@@ -1049,6 +1051,7 @@ bool Net35::forward_chunk_batched_(const int32_t *tok, int64_t T, State35 &st,
+@@ -1049,6 +1053,7 @@ bool Net35::forward_chunk_batched_(const int32_t *tok, int64_t T, State35 &st,
    const bool cb = T > 1 && reg_.prefill_hot > 0 && !prefill_ondemand();
    std::vector<RouteRec> local_recs;
    for (size_t li = 0; li < layers_.size(); li++) {
@@ -871,7 +1177,7 @@ index a4e499c..b01a91d 100644
      if (cb) prefill_before_layer(static_cast<int>(li));  // qwen3_5.py:285-287 before_layer_cb
      RouteRec rec;
      if (!layer_fwd(layers_[li], static_cast<int>(li), x, st, false, rec, nullptr, err))
-@@ -1064,6 +1067,10 @@ bool Net35::forward_chunk_batched_(const int32_t *tok, int64_t T, State35 &st,
+@@ -1064,6 +1069,10 @@ bool Net35::forward_chunk_batched_(const int32_t *tok, int64_t T, State35 &st,
      }
      local_recs.push_back(std::move(rec));
    }
@@ -882,7 +1188,7 @@ index a4e499c..b01a91d 100644
    mx::array xs = e0_rms_norm(
        x, mx::astype(wrap_f32(final_norm_w_, mkshape({H_})), mx::bfloat16), eps_);
    mx::array lastrow =
-@@ -1141,6 +1148,10 @@ bool Net35::moe_hot_branch_(int li, const mx::array &m_in, int64_t T,
+@@ -1141,6 +1150,10 @@ bool Net35::moe_hot_branch_(int li, const mx::array &m_in, int64_t T,
                            "affine", true);
    auto out = mx::take(z, inv_order, 0);                              // _scatter_unsort(1162)
    if (!miss_rows.empty()) {
@@ -893,7 +1199,7 @@ index a4e499c..b01a91d 100644
      std::map<int64_t, std::vector<int64_t>> by_expert;
      for (auto i : miss_rows) by_expert[flat[i]].push_back(i);
      auto &cx = exec_counters();
-@@ -1171,6 +1182,13 @@ bool Net35::moe_hot_branch_(int li, const mx::array &m_in, int64_t T,
+@@ -1171,6 +1184,13 @@ bool Net35::moe_hot_branch_(int li, const mx::array &m_in, int64_t T,
        auto farr = mx::array(fpos.begin(), mkshape({m}), mx::int32);
        out = mx::scatter_add(
            out, {farr}, mx::reshape(ze, mkshape({m, 1, 1, H_})), {0});
@@ -908,14 +1214,17 @@ index a4e499c..b01a91d 100644
    }
    routed = mx::reshape(out, mkshape({1, T, k, H_}));
 diff --git a/macos/crates/engine-native/src/net35.hpp b/macos/crates/engine-native/src/net35.hpp
-index fee1cf2..c3f3dd7 100644
+index fee1cf2..2c93ac7 100644
 --- a/macos/crates/engine-native/src/net35.hpp
 +++ b/macos/crates/engine-native/src/net35.hpp
-@@ -61,6 +61,13 @@ class Net35 {
+@@ -61,6 +61,16 @@ class Net35 {
    uint64_t dense_resident_bytes() const { return dense_bytes_; }
    void prefetch(const Step &plan);
    ExpertIo::Metrics io_metrics() const { return io_->snapshot(); }
 +  void set_budget(std::shared_ptr<JointBudget> budget) { io_->set_budget(std::move(budget)); }
++  void configure_residency(bool adaptive, const std::string &path, const std::string &model_dir) {
++    io_->configure_residency(adaptive,path,model_dir);
++  }
 +  void drop_cached() { io_->drop_cached(); }
 +  void configure_io(const std::string &dir, bool batch, bool overlap = false) {
 +    io_->configure_io(dir,batch); overlap_prefill_ = overlap;
@@ -925,7 +1234,7 @@ index fee1cf2..c3f3dd7 100644
    void shard_warm(const std::vector<std::string> &shard_names, bool seq);
  
    void init_state(State35 &st) const;
-@@ -99,6 +106,7 @@ class Net35 {
+@@ -99,6 +109,7 @@ class Net35 {
    mutable std::shared_ptr<const ModelFiles> files_;
    std::shared_ptr<const ExpertMap> emap_;
    std::unique_ptr<ExpertIo> io_;
@@ -934,7 +1243,7 @@ index fee1cf2..c3f3dd7 100644
    std::vector<Layer> layers_;
    std::unique_ptr<Prerouter> pr_;
 diff --git a/macos/crates/engine-native/src/net8b.cpp b/macos/crates/engine-native/src/net8b.cpp
-index 8ed310a..79205d8 100644
+index 8ed310a..3f9de04 100644
 --- a/macos/crates/engine-native/src/net8b.cpp
 +++ b/macos/crates/engine-native/src/net8b.cpp
 @@ -561,6 +561,7 @@ void Net8b::reset_state(State8b &st) const {
@@ -945,7 +1254,23 @@ index 8ed310a..79205d8 100644
    const int64_t T = x.shape(1);
    const auto dt = x.dtype();
    auto norm_w = [&](const std::vector<float> &v) {
-@@ -1237,6 +1238,7 @@ bool Net8b::prefill_batched_(const std::vector<int32_t> &tokens, State8b &st,
+@@ -786,6 +787,7 @@ bool Net8b::layer_fwd(Layer &L, int li, mx::array &x, State8b &st, bool decode,
+       }
+     }
+     if (owner) last_topk_[static_cast<size_t>(li)] = use_pg ? teach : idx;
++    io_->observe_decode(li, rec.sel.inds);
+     auto out = mx::sum(routed * mx::astype(mx::expand_dims(w, -1), routed.dtype()),
+                        std::vector<int>{-2}, false);
+     mx::array sh =
+@@ -961,6 +963,7 @@ bool Net8b::layer_fwd(Layer &L, int li, mx::array &x, State8b &st, bool decode,
+   rec.layer = li;
+   rec.predicted = predicted;
+   rec.sel = sels[static_cast<size_t>(T - 1)];
++  if (decode && T == 1) io_->observe_decode(li, rec.sel.inds);
+ 
+   const bool owner = li >= reg_.first_owner && li <= reg_.last_owner;
+   if (owner) {
+@@ -1237,6 +1240,7 @@ bool Net8b::prefill_batched_(const std::vector<int32_t> &tokens, State8b &st,
                                    last ? probe : nullptr))
          return false;
        st.position += n;  // base.py:83
@@ -953,7 +1278,7 @@ index 8ed310a..79205d8 100644
      }
      if (!prefill_end_(st, err)) return false;
      logits_last = std::move(lg);
-@@ -1259,6 +1261,7 @@ bool Net8b::forward_chunk_batched_(const int32_t *tok, int64_t T, State8b &st,
+@@ -1259,6 +1263,7 @@ bool Net8b::forward_chunk_batched_(const int32_t *tok, int64_t T, State8b &st,
                    (reg_.full_layer_prefill || reg_.prefill_hot > 0);
    std::vector<RouteRec> local_recs;
    for (size_t li = 0; li < layers_.size(); li++) {
@@ -961,7 +1286,7 @@ index 8ed310a..79205d8 100644
      if (cb) prefill_before_layer(static_cast<int>(li));
      RouteRec rec;
      if (!layer_fwd(layers_[li], static_cast<int>(li), x, st, false, true, rec, err))
-@@ -1274,6 +1277,10 @@ bool Net8b::forward_chunk_batched_(const int32_t *tok, int64_t T, State8b &st,
+@@ -1274,6 +1279,10 @@ bool Net8b::forward_chunk_batched_(const int32_t *tok, int64_t T, State8b &st,
      }
      if (layers_[li].has_moe) local_recs.push_back(std::move(rec));
    }
@@ -973,14 +1298,17 @@ index 8ed310a..79205d8 100644
        x, mx::astype(wrap_f32(final_norm_w_, mkshape({H_})), mx::bfloat16), eps_);
    mx::array lastrow =
 diff --git a/macos/crates/engine-native/src/net8b.hpp b/macos/crates/engine-native/src/net8b.hpp
-index 26fb1bb..0cf82bb 100644
+index 26fb1bb..0ca1ca6 100644
 --- a/macos/crates/engine-native/src/net8b.hpp
 +++ b/macos/crates/engine-native/src/net8b.hpp
-@@ -44,6 +44,11 @@ class Net8b {
+@@ -44,6 +44,14 @@ class Net8b {
    uint64_t dense_resident_bytes() const { return dense_bytes_; }
    void prefetch(const Step &plan);
    ExpertIo::Metrics io_metrics() const { return io_->snapshot(); }
 +  void set_budget(std::shared_ptr<JointBudget> budget) { io_->set_budget(std::move(budget)); }
++  void configure_residency(bool adaptive, const std::string &path, const std::string &model_dir) {
++    io_->configure_residency(adaptive,path,model_dir);
++  }
 +  void drop_cached() { io_->drop_cached(); }
 +  void configure_io(const std::string &dir, bool batch) { io_->configure_io(dir,batch); }
 +  std::function<void()> memory_guard;

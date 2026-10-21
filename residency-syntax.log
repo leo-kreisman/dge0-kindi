@@ -1,0 +1,4 @@
+results/edge0-kindi-worktree/macos/crates/engine-native/src/expertio.cpp: In member function ‘void e0n::ExpertIo::ShardMaps::seq_read(const string&)’:
+results/edge0-kindi-worktree/macos/crates/engine-native/src/expertio.cpp:90:12: warning: compound assignment with ‘volatile’-qualified left operand is deprecated [-Wvolatile]
+   90 |       sink += v;
+      |       ~~~~~^~~~

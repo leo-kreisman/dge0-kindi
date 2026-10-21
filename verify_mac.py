@@ -87,8 +87,10 @@ def evaluate(args):
            'model_identity': str(Path(args.model_dir).resolve()),
            'expert_io': {'batch_materialize': args.child != 'baseline',
                          'overlap_prefill': args.overlap_prefill and args.child != 'baseline',
-                         'packed_dir': args.packed_experts_dir if args.child == 'packed' else ''},
-           'prefix_cache': {'enabled': args.child in ('cached', 'packed'),
+                         'packed_dir': args.packed_experts_dir if args.child in ('packed','adaptive','profiled') else '',
+                         'adaptive_cache': args.child in ('adaptive','profiled'),
+                         'profile_path': args.profile_path if args.child in ('adaptive','profiled') else ''},
+           'prefix_cache': {'enabled': args.child in ('cached', 'packed', 'adaptive', 'profiled'),
                             'budget_bytes': 512 * 1024 ** 2,
                             'min_prefix_tokens': 128, 'checkpoint_every': 1024}}
     h = lib.e0_engine_create(args.tier.encode(), os.fsencode(args.model_dir),
@@ -153,6 +155,8 @@ def supervised(args, mode, folder):
     cmd += ['--prompt-tokens',str(args.prompt_tokens)]
     if args.packed_experts_dir:
         cmd += ['--packed-experts-dir',args.packed_experts_dir]
+    if args.profile_restart and mode in ('adaptive','profiled'):
+        cmd += ['--profile-path', str(folder / 'expert-profile.json')]
     if args.overlap_prefill:
         cmd += ['--overlap-prefill']
     peak = 0
@@ -194,13 +198,20 @@ def main():
     ap.add_argument('--packed-experts-dir',default='',help='Optional complete sidecar directory from pack_experts.py')
     ap.add_argument('--overlap-prefill',action='store_true',
                     help='Opt-in 35B resident-work overlap with bounded cold-expert graph evaluation')
+    ap.add_argument('--adaptive-cache',action='store_true',help='Compare adaptive residency against unchanged LRU arms')
+    ap.add_argument('--profile-restart',action='store_true',help='Also save a fresh adaptive profile and test a new worker loading it')
+    ap.add_argument('--profile-path',default='',help=argparse.SUPPRESS)
     ap.add_argument('--trials',type=int,default=2,help='Alternate mode order across independent trials (1..4)')
-    ap.add_argument('--child', choices=['reference', 'baseline', 'io', 'cached', 'packed'], help=argparse.SUPPRESS)
+    ap.add_argument('--child', choices=['reference', 'baseline', 'io', 'cached', 'packed', 'adaptive', 'profiled'], help=argparse.SUPPRESS)
     args = ap.parse_args()
     if not 1 <= args.max_new_tokens <= 256 or args.timeout <= 0:
         ap.error('max-new-tokens must be 1..256 and timeout must be positive')
     if not 2100 <= args.prompt_tokens <= 131072 or not 1 <= args.trials <= 4:
         ap.error('prompt-tokens must be 2100..131072 and trials 1..4')
+    if args.profile_restart:
+        args.adaptive_cache = True
+    if args.child == 'profiled' and not Path(args.profile_path).is_file():
+        ap.error('profiled arm requires a previously saved profile')
     if sys.platform != 'darwin':
         ap.error('Metal verification must run on the target Mac; Linux results would not validate it')
     if args.child:
@@ -211,8 +222,11 @@ def main():
     modes = (['reference'] if args.reference_dylib else []) + ['baseline', 'io', 'cached']
     if args.packed_experts_dir:
         modes.append('packed')
+    if args.adaptive_cache and not args.profile_restart:
+        modes.append('adaptive')
     result = {'status': 'incomplete', 'trials': [], 'prompt_tokens': args.prompt_tokens,
-              'overlap_prefill':args.overlap_prefill,
+              'overlap_prefill':args.overlap_prefill, 'adaptive_cache':args.adaptive_cache,
+              'profile_restart':args.profile_restart,
               'note': 'Alternating mode order; no OS page-cache flush; sampled memory, not a hard ceiling.'}
     try:
         for trial in range(args.trials):
@@ -220,7 +234,13 @@ def main():
             trial_dir.mkdir()
             run = {}
             result['trials'].append(run)
-            for mode in (modes if trial % 2 == 0 else list(reversed(modes))):
+            ordered = modes if trial % 2 == 0 else list(reversed(modes))
+            # Dependent restart test follows its fresh producer; never reuse another trial's file.
+            if args.profile_restart:
+                ordered = ordered + ['adaptive']
+            if args.profile_restart:
+                ordered = ordered + ['profiled']
+            for mode in ordered:
                 print(f'Trial {trial+1}: {mode}, one worker, 7.5 GiB RSS watchdog', flush=True)
                 run[mode] = supervised(args, mode, trial_dir)
                 for row in run[mode]['rows']:
@@ -255,7 +275,7 @@ def check_modes(run):
     base = run['baseline']['rows']
     checks['token_parity'] = all(bool(a['tokens']) and a['tokens'] == b['tokens']
         for mode in modes for a,b in zip(base,run[mode]['rows']))
-    for mode in ('cached', 'packed'):
+    for mode in ('cached', 'packed', 'adaptive', 'profiled'):
         if mode not in run:
             continue
         rows = run[mode]['rows']
@@ -270,6 +290,12 @@ def check_modes(run):
     if 'packed' in run:
         checks['packed_path_exercised'] = any(r['stats']['expert_io']['packed_read_calls'] > 0
                                              for r in run['packed']['rows'])
+    for mode in ('adaptive','profiled'):
+        if mode not in run:
+            continue
+        stats=[r['stats'].get('expert_residency',{}) for r in run[mode]['rows']]
+        checks[mode+'_observed'] = all(s.get('enabled',False) for s in stats) and stats[-1].get('observations',0)>0
+        checks[mode+'_profile_state'] = all((s.get('loaded_entries',-1)>0 if mode=='profiled' else s.get('loaded_entries',-1)==0) for s in stats)
     return checks
 
 if __name__ == '__main__':

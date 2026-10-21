@@ -1,0 +1,30 @@
+{
+  "upstream_edge0_revision": "85b2a03b2a05f66a6526ff904e820dfb3509a7d9",
+  "strata_inspected_revision": "9de04cd44e927a9a3df6bbc0e94fc1be8b844ba4",
+  "native_cache_stream_tests": "passed ASan/UBSan",
+  "packed_reader_cases": 6,
+  "residency_and_profile_checks": "passed ASan/UBSan",
+  "python_timing_comparison_tests": 6,
+  "native_syntax_checks": [
+    "expertio.cpp",
+    "abiface.cpp",
+    "net35.cpp",
+    "net8b.cpp"
+  ],
+  "fresh_patch_and_idempotence": "passed",
+  "synthetic_trace": {
+    "lru_misses": 1200,
+    "adaptive_misses": 992,
+    "note": "Deterministic locality/scan fixture; not inference performance"
+  },
+  "metal_inference": "not run; requires target Mac",
+  "total_memory_fit": "unverified; existing 8 GiB target is not a strict decimal 8 GB limit",
+  "default_policy": "LRU; adaptive is opt-in",
+  "files": {
+    "edge0-kindi.patch": "7cc6ac409ad265566c32fe29c6de6e589cf4e9e82ca38f7971d69a42c888211b",
+    "test_residency.cpp": "da30babcf043508bbd8311cdac2a8e1a03d752b91baab15b241edc4c24ed4509",
+    "test.sh": "0cd8ad4390520e9812fd7a953d64e3772cee53d94573679cb13714e69a1fdfd3",
+    "verify_mac.py": "61f970b1aa016c4a00bfa05090075e99dd050f249f2f77c920d013b9ed925612",
+    "test_timing.py": "7443df8c4836daa151787efd26e93f4aa9173d0912e607ce40ac557a669e14ea"
+  }
+}

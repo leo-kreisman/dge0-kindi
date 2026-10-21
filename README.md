@@ -6,6 +6,8 @@ This is inference engineering with existing Edge0 weights. No model training.
 
 ## Documentation
 
+* [New: Strata-inspired adaptive residency and restart profiles](docs/strata-adaptive-residency.md)
+
 * [Mac walkthrough: download, build, guarded comparisons](walkthrough.md)
 * [Research comparisons, implementation decisions, evidence and remaining work](docs/research-and-results-20261020.md)
 
@@ -268,3 +270,12 @@ The complete native 35B checkpoint is available in the [split model release](htt
 The model release has 39 uploaded assets, checked on 2026-10-20. See the [walkthrough](walkthrough.md) for reconstruction, disk-space requirements and Mac evaluation.
 
 `validation-summary.json` retains the file hashes from the v0.2 validation snapshot; `SHA256SUMS.files` covers the current checkout, including updated documentation. Released ZIPs remain unchanged.
+
+## Adaptive residency experiment (current Git checkout)
+
+Optional demand-frequency cache eviction and saved usage profiles are now implemented.
+The shared expert cache capacity and memory guards remain unchanged. Use
+`verify_mac.py --adaptive-cache` for an additional comparison arm, or
+`--profile-restart` to exercise a fresh process loading a saved profile.
+See [configuration, tests and limitations](docs/strata-adaptive-residency.md).
+The v0.2 ZIP is unchanged and does not include this newer experiment.
