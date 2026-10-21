@@ -1,3 +1,8 @@
 __pycache__/
 edge0-kindi/
 edge0-kindi-mac-result*/
+model-download/
+packed-experts/
+edge0-reference/
+edge0-kindi-adaptive-result*/
+edge0-kindi-profile-restart-result*/

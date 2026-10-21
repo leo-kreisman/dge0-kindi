@@ -4,6 +4,13 @@ Experimental native **Mac** runtime patch, 2026-10-20. Target: an 18GB unified-m
 Mac with company applications running, reserving at most 8 GiB for inference.
 This is inference engineering with existing Edge0 weights. No model training.
 
+## Start on a Mac or PC
+
+**Read [START_HERE.md](START_HERE.md) first.** It covers platform support, downloads,
+checksums, offline transfers, prerequisites, updates and troubleshooting.
+The new runtime features target the native Mac engine; PC users can prepare the
+model and run portable tests, but the PC inference backend has not been ported.
+
 ## Documentation
 
 * [New: Strata-inspired adaptive residency and restart profiles](docs/strata-adaptive-residency.md)
