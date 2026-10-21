@@ -4,9 +4,18 @@ Experimental native **Mac** runtime patch, 2026-10-20. Target: an 18GB unified-m
 Mac with company applications running, reserving at most 8 GiB for inference.
 This is inference engineering with existing Edge0 weights. No model training.
 
+## Documentation
+
+* [Mac walkthrough: download, build, guarded comparisons](walkthrough.md)
+* [Research comparisons, implementation decisions, evidence and remaining work](docs/research-and-results-20261020.md)
+
+The requested ceiling is 8GB; current guard thresholds use GiB (8 GiB ≈ 8.59GB).
+See the research record for this units distinction and total-memory limitations.
+
 ## Status
 
-Implemented and portable-tested; **not yet validated with Metal or model weights**.
+Implemented and portable-tested, including sampled byte checks on real weights;
+**Metal inference and full memory fit remain unverified**.
 No tokens/s improvement, coding-quality result, or measured 8 GiB peak is claimed.
 The Linux workstation has run only small CPU tests and compilation checks. No
 existing model service, desktop driver, boot configuration, or model file changed.
@@ -247,7 +256,7 @@ snapshot result is claimed.
 
 ## This distribution
 
-This repository contains an experimental patch and verification tools, **not model weights or a prebuilt Mac binary**.
+The Git tree and runtime ZIP contain an experimental patch and verification tools, **not model weights or a prebuilt Mac binary**. The complete 35B checkpoint is available separately in this repository’s split model release below.
 Download the portable ZIP and its SHA-256 checksum from [Releases](https://github.com/leo-kreisman/dge0-kindi/releases/tag/edge0-kindi-mac-pilot-v0.2.0).
 Compatible weights are published separately at [Edge0-35B-A3B-preview](https://huggingface.co/Edge0/Edge0-35B-A3B-preview) and [Edge0-8B-A1B-preview](https://huggingface.co/Edge0/Edge0-8B-A1B-preview). Use the complete compatible checkpoint, including its adapters and tokenizer.
 See LICENSE and NOTICE for source attribution.
@@ -255,3 +264,7 @@ See LICENSE and NOTICE for source attribution.
 ## Model download
 
 The complete native 35B checkpoint is available in the [split model release](https://github.com/leo-kreisman/dge0-kindi/releases/tag/model-edge0-35b-a3b-int4-v1). Download its `download_model.py` and run it with Python 3 to fetch, verify and reconstruct the model.
+
+The model release has 39 uploaded assets, checked on 2026-10-20. See the [walkthrough](walkthrough.md) for reconstruction, disk-space requirements and Mac evaluation.
+
+`validation-summary.json` retains the file hashes from the v0.2 validation snapshot; `SHA256SUMS.files` covers the current checkout, including updated documentation. Released ZIPs remain unchanged.
