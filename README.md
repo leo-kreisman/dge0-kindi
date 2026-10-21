@@ -251,3 +251,7 @@ This repository contains an experimental patch and verification tools, **not mod
 Download the portable ZIP and its SHA-256 checksum from [Releases](https://github.com/leo-kreisman/dge0-kindi/releases/tag/edge0-kindi-mac-pilot-v0.2.0).
 Compatible weights are published separately at [Edge0-35B-A3B-preview](https://huggingface.co/Edge0/Edge0-35B-A3B-preview) and [Edge0-8B-A1B-preview](https://huggingface.co/Edge0/Edge0-8B-A1B-preview). Use the complete compatible checkpoint, including its adapters and tokenizer.
 See LICENSE and NOTICE for source attribution.
+
+## Model download
+
+The complete native 35B checkpoint is available in the [split model release](https://github.com/leo-kreisman/dge0-kindi/releases/tag/model-edge0-35b-a3b-int4-v1). Download its `download_model.py` and run it with Python 3 to fetch, verify and reconstruct the model.
