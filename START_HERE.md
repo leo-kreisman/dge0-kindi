@@ -1,6 +1,8 @@
 # Start here: download on a Mac or PC
 
-Updated 2026-10-21. This repository contains the Edge0 + Kindi-inspired native Mac patch, Strata-inspired adaptive expert caching, tests, and a downloader for the split Edge0 35B INT4 checkpoint. Use this Git checkout for the latest code. The older **v0.2 runtime ZIP does not contain adaptive residency or saved usage profiles**.
+Updated 2026-10-21. For the new opt-in Metal cache decision path, see [GPU-decided expert slots](docs/gpu-graph-expert-pool.md).
+
+This repository contains the Edge0 + Kindi-inspired native Mac patch, Strata-inspired adaptive expert caching, tests, and a downloader for the split Edge0 35B INT4 checkpoint. Use this Git checkout for the latest code. The older **v0.2 runtime ZIP does not contain adaptive residency, saved usage profiles or the GPU graph pool**.
 
 ## Choose your platform
 
@@ -118,7 +120,7 @@ The [pinned upstream Windows guide](https://github.com/Edge0-AI/Edge0/blob/85b2a
 2. Run the short guarded smoke test.
 3. Measure TTFT, decode tokens/s and complete request time with longer output.
 4. Optionally pack experts and compare that storage path.
-5. Compare `--adaptive-cache`, then separately validate `--profile-restart`.
+5. Compare `--adaptive-cache`, then separately validate `--profile-restart`. For the new `--graph-pool` experiment, run its tiny Metal probe first, then its guarded comparison.
 6. Test real coding tasks and longer context only after the short run passes.
 
 Keep `libedge0_engine_native.dylib`, `libmlx.dylib` and `mlx.metallib` together in the generated `macos/target/engine` folder. Point the runner at that native library. This distribution has no prebuilt Mac binary and does not automatically install a service or configure OMP/OpenCode.

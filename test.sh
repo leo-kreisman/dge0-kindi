@@ -29,3 +29,5 @@ python3 "$script_dir/test_pack_experts.py" "$build_dir/test_packed"
 "${CXX:-c++}" -std=c++20 -O0 -g1 -pthread -fsanitize=address,undefined \
   -I"$json_include" -I"$source_dir" "$script_dir/test_residency.cpp" -o "$build_dir/test_residency"
 "$build_dir/test_residency"
+
+python3 "$script_dir/test_graph_lru.py" "$checkout"

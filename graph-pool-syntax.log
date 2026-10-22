@@ -1,0 +1,10 @@
+Checking expertio.cpp
+/tmp/edge0-graph-validation-20261021/macos/crates/engine-native/src/expertio.cpp: In member function ‘void e0n::ExpertIo::ShardMaps::seq_read(const string&)’:
+/tmp/edge0-graph-validation-20261021/macos/crates/engine-native/src/expertio.cpp:90:12: warning: compound assignment with ‘volatile’-qualified left operand is deprecated [-Wvolatile]
+   90 |       sink += v;
+      |       ~~~~~^~~~
+Checking abiface.cpp
+Checking net35.cpp
+Checking net8b.cpp
+Checking test_graph_pool_mac.cpp
+All five C++ syntax checks passed. Metal compiler/runtime not exercised.

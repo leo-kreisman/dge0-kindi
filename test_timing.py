@@ -48,6 +48,24 @@ class TimingTests(unittest.TestCase):
             row['stats']['expert_residency']['loaded_entries']=0
         self.assertFalse(all(check_modes(bad).values()))
 
+    def test_graph_arm_requires_activity_fills_budget_and_parity(self):
+        run=self.run_fixture()
+        run['graph']=copy.deepcopy(run['cached'])
+        for row in run['graph']['rows']:
+            row['stats']['graph_expert_pool']={'enabled':True,'decisions':12,'fills':4,
+                'reserved_peak_bytes':128,'reserved_limit_bytes':256*1024**2,'budget_failures':0}
+        self.assertTrue(all(check_modes(run).values()))
+        for mutate in [
+            lambda r:r['graph']['rows'][0]['stats'].pop('graph_expert_pool'),
+            lambda r:[x['stats']['graph_expert_pool'].update(decisions=0) for x in r['graph']['rows']],
+            lambda r:[x['stats']['graph_expert_pool'].update(fills=0) for x in r['graph']['rows']],
+            lambda r:r['graph']['rows'][0]['stats']['graph_expert_pool'].update(reserved_peak_bytes=300*1024**2),
+            lambda r:r['graph']['rows'][0]['stats']['graph_expert_pool'].update(budget_failures=1),
+            lambda r:r['graph']['rows'][0].update(tokens=[9]),
+        ]:
+            bad=copy.deepcopy(run); mutate(bad)
+            self.assertFalse(all(check_modes(bad).values()))
+
     def test_prefill_and_terminal_cleanup_excluded_from_decode(self):
         result = timing_metrics(10, [20, 20.5, 21], 22)
         self.assertEqual(result['decode_tokens_per_second'], 2)

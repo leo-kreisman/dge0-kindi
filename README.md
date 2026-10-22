@@ -1,6 +1,6 @@
 # Edge0 + Kindi-inspired cache integration
 
-Experimental native **Mac** runtime patch, 2026-10-20. Target: an 18GB unified-memory
+Experimental native **Mac** runtime patch, 2026-10-21. Target: an 18GB unified-memory
 Mac with company applications running, reserving at most 8 GiB for inference.
 This is inference engineering with existing Edge0 weights. No model training.
 
@@ -12,6 +12,8 @@ The new runtime features target the native Mac engine; PC users can prepare the
 model and run portable tests, but the PC inference backend has not been ported.
 
 ## Documentation
+
+* [New: GPU-decided expert slots with SSD miss handling](docs/gpu-graph-expert-pool.md)
 
 * [New: Strata-inspired adaptive residency and restart profiles](docs/strata-adaptive-residency.md)
 

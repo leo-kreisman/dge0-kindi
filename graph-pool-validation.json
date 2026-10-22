@@ -1,0 +1,32 @@
+{
+  "date": "2026-10-21",
+  "upstream_revision": "85b2a03b2a05f66a6526ff904e820dfb3509a7d9",
+  "design_reference": "https://github.com/ggml-org/llama.cpp/issues/29949",
+  "default": "disabled; opt-in 35B batched permanently routed decode layers only",
+  "portable_regression_suite": "passed; ASan/UBSan native, packed I/O (6 cases), residency/profile and graph decision tests",
+  "graph_decision_oracle_steps": 42000,
+  "python_comparison_tests": 7,
+  "cpp_syntax_checks": [
+    "expertio.cpp",
+    "abiface.cpp",
+    "net35.cpp",
+    "net8b.cpp",
+    "test_graph_pool_mac.cpp"
+  ],
+  "fresh_patch_and_idempotence": "passed",
+  "metal_kernel_compilation_and_execution": "not run; Linux host; receiving-Mac probe provided",
+  "model_parity": "not run; guarded comparison provided",
+  "inference_performance": "unmeasured; no speedup claim",
+  "total_8GB_memory_fit": "unverified; existing guards use GiB, not a strict decimal 8GB hard ceiling",
+  "pool_reservation_cap_bytes": 268435456,
+  "shared_payload_limit_bytes": 2147483648,
+  "remaining_host_synchronization": "one miss mailbox per decision, including hits; fill materialization on misses; batched routing telemetry at token boundary",
+  "files": {
+    "edge0-kindi.patch": "6b066020b46673b519bac1c7423225c9c78551377addb21fbf945b0bef66eba1",
+    "verify_mac.py": "1ded3f56f655ae053003d86a0a869b745fd9a8c1f8e0cb3e1b261894d1aa45e2",
+    "test_timing.py": "2dba1c1df4749b41221ab23f960dbba935333a0ca12fb6d66cc144dfb60d28da",
+    "test.sh": "d513da71c2fa7696850c0310a67f6e9c09e9f850c1cd6fa73e204b045bfdf607",
+    "test_graph_lru.py": "21cf3fc677f9579c1893f05a9e6c1ca7ed2beacfd86b64710666e6a534240061",
+    "test_graph_pool_mac.cpp": "2fe978f592f59cc799f4a27e99de5d2e55f611023ed28c5f4640b9343f48f39f"
+  }
+}

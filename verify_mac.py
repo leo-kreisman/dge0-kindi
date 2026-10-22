@@ -87,10 +87,11 @@ def evaluate(args):
            'model_identity': str(Path(args.model_dir).resolve()),
            'expert_io': {'batch_materialize': args.child != 'baseline',
                          'overlap_prefill': args.overlap_prefill and args.child != 'baseline',
-                         'packed_dir': args.packed_experts_dir if args.child in ('packed','adaptive','profiled') else '',
+                         'packed_dir': args.packed_experts_dir if args.child in ('packed','adaptive','profiled','graph') else '',
                          'adaptive_cache': args.child in ('adaptive','profiled'),
+                         'graph_pool_slots': args.graph_pool_slots if args.child == 'graph' else 0,
                          'profile_path': args.profile_path if args.child in ('adaptive','profiled') else ''},
-           'prefix_cache': {'enabled': args.child in ('cached', 'packed', 'adaptive', 'profiled'),
+           'prefix_cache': {'enabled': args.child in ('cached', 'packed', 'adaptive', 'profiled', 'graph'),
                             'budget_bytes': 512 * 1024 ** 2,
                             'min_prefix_tokens': 128, 'checkpoint_every': 1024}}
     h = lib.e0_engine_create(args.tier.encode(), os.fsencode(args.model_dir),
@@ -140,6 +141,10 @@ def evaluate(args):
                          **timing_metrics(start, token_times, finished),
                          'expert_io_delta': {k: v-before_stats.get('expert_io',{}).get(k,0)
                                              for k,v in stats.get('expert_io',{}).items()},
+                         'graph_pool_delta': {k: stats.get('graph_expert_pool',{}).get(k,0)-
+                                                 before_stats.get('graph_expert_pool',{}).get(k,0)
+                            for k in ('decisions','requested','fills','hit_steps','mailbox_syncs',
+                                      'fill_batches','decision_wait_ns','fill_wait_ns','budget_failures')},
                          'stats': stats})
     finally:
         lib.e0_engine_destroy(h)
@@ -153,6 +158,7 @@ def supervised(args, mode, folder):
            '--model-dir', args.model_dir, '--tier', args.tier, '--output', str(out),
            '--max-new-tokens', str(args.max_new_tokens), '--timeout', str(args.timeout)]
     cmd += ['--prompt-tokens',str(args.prompt_tokens)]
+    cmd += ['--graph-pool-slots',str(args.graph_pool_slots)]
     if args.packed_experts_dir:
         cmd += ['--packed-experts-dir',args.packed_experts_dir]
     if args.profile_restart and mode in ('adaptive','profiled'):
@@ -198,16 +204,22 @@ def main():
     ap.add_argument('--packed-experts-dir',default='',help='Optional complete sidecar directory from pack_experts.py')
     ap.add_argument('--overlap-prefill',action='store_true',
                     help='Opt-in 35B resident-work overlap with bounded cold-expert graph evaluation')
+    ap.add_argument('--graph-pool', action='store_true', help='Opt-in 35B Metal-decided SSD expert pool comparison')
+    ap.add_argument('--graph-pool-slots',type=int,default=8,help='Slots per permanently routed layer; 4..32, fixed 256 MiB reservation cap')
     ap.add_argument('--adaptive-cache',action='store_true',help='Compare adaptive residency against unchanged LRU arms')
     ap.add_argument('--profile-restart',action='store_true',help='Also save a fresh adaptive profile and test a new worker loading it')
     ap.add_argument('--profile-path',default='',help=argparse.SUPPRESS)
     ap.add_argument('--trials',type=int,default=2,help='Alternate mode order across independent trials (1..4)')
-    ap.add_argument('--child', choices=['reference', 'baseline', 'io', 'cached', 'packed', 'adaptive', 'profiled'], help=argparse.SUPPRESS)
+    ap.add_argument('--child', choices=['reference', 'baseline', 'io', 'cached', 'packed', 'adaptive', 'profiled', 'graph'], help=argparse.SUPPRESS)
     args = ap.parse_args()
     if not 1 <= args.max_new_tokens <= 256 or args.timeout <= 0:
         ap.error('max-new-tokens must be 1..256 and timeout must be positive')
     if not 2100 <= args.prompt_tokens <= 131072 or not 1 <= args.trials <= 4:
         ap.error('prompt-tokens must be 2100..131072 and trials 1..4')
+    if not 4 <= args.graph_pool_slots <= 32:
+        ap.error('graph-pool-slots must be 4..32')
+    if (args.graph_pool or args.child == 'graph') and args.tier != 'edge0-35b':
+        ap.error('graph pool supports only edge0-35b')
     if args.profile_restart:
         args.adaptive_cache = True
     if args.child == 'profiled' and not Path(args.profile_path).is_file():
@@ -222,11 +234,14 @@ def main():
     modes = (['reference'] if args.reference_dylib else []) + ['baseline', 'io', 'cached']
     if args.packed_experts_dir:
         modes.append('packed')
+    if args.graph_pool:
+        modes.append('graph')
     if args.adaptive_cache and not args.profile_restart:
         modes.append('adaptive')
     result = {'status': 'incomplete', 'trials': [], 'prompt_tokens': args.prompt_tokens,
               'overlap_prefill':args.overlap_prefill, 'adaptive_cache':args.adaptive_cache,
               'profile_restart':args.profile_restart,
+              'graph_pool':args.graph_pool,'graph_pool_slots':args.graph_pool_slots,
               'note': 'Alternating mode order; no OS page-cache flush; sampled memory, not a hard ceiling.'}
     try:
         for trial in range(args.trials):
@@ -275,7 +290,7 @@ def check_modes(run):
     base = run['baseline']['rows']
     checks['token_parity'] = all(bool(a['tokens']) and a['tokens'] == b['tokens']
         for mode in modes for a,b in zip(base,run[mode]['rows']))
-    for mode in ('cached', 'packed', 'adaptive', 'profiled'):
+    for mode in ('cached', 'packed', 'adaptive', 'profiled', 'graph'):
         if mode not in run:
             continue
         rows = run[mode]['rows']
@@ -296,6 +311,12 @@ def check_modes(run):
         stats=[r['stats'].get('expert_residency',{}) for r in run[mode]['rows']]
         checks[mode+'_observed'] = all(s.get('enabled',False) for s in stats) and stats[-1].get('observations',0)>0
         checks[mode+'_profile_state'] = all((s.get('loaded_entries',-1)>0 if mode=='profiled' else s.get('loaded_entries',-1)==0) for s in stats)
+    if 'graph' in run:
+        stats=[r['stats'].get('graph_expert_pool',{}) for r in run['graph']['rows']]
+        checks['graph_path_exercised'] = all(s.get('enabled',False) for s in stats) and stats[-1].get('decisions',0)>0
+        checks['graph_fills_exercised'] = stats[-1].get('fills',0)>0
+        checks['graph_pool_budget_ok'] = all(0 < s.get('reserved_peak_bytes',0) <= s.get('reserved_limit_bytes',0) <= 256*1024**2
+                                           and s.get('budget_failures',-1)==0 for s in stats)
     return checks
 
 if __name__ == '__main__':

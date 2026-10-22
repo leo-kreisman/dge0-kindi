@@ -8,3 +8,5 @@ No Kindi model weights or CUDA implementation are included.
 Unofficial experimental integration; no upstream endorsement claimed.
 
 Adaptive residency and restart usage profiles: original implementation informed by Strata (https://github.com/Niko1221/Strata), inspected revision 9de04cd44e927a9a3df6bbc0e94fc1be8b844ba4. No Strata source or kernels included.
+
+GPU-decided SSD expert pool (2026-10-21): original Metal/MLX implementation informed by llama.cpp issue #29949 and commit c81901a57 (https://github.com/ggml-org/llama.cpp/issues/29949). No CUDA/HIP source copied. CPU SSD refill remains; this is not the proposal's pinned-RAM execution path.

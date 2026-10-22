@@ -171,3 +171,12 @@ normal OS file caching, its restarted timing is not a cold-SSD comparison.
 Inspect `summary.json` in each output directory. A passing report is the first
 gate, not proof of all-context correctness or daily coding usability. Do not
 replace the existing working model/server until actual target-Mac testing passes.
+
+## Optional GPU-decided expert slots
+
+The [GPU graph pool guide](docs/gpu-graph-expert-pool.md) provides the required
+small Metal probe and copyable `--graph-pool` comparisons. This experiment moves
+slot decisions into Metal for permanently routed decode layers while retaining
+the CPU SSD miss handler. It is disabled by default, shares the existing memory
+budget, and still requires a small mailbox synchronization on every decision.
+No Mac speedup has been measured. Follow that guide after the ordinary smoke test.

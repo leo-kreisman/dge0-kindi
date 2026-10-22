@@ -20,7 +20,7 @@ index 6d3861f..f1013f4 100644
  	rm -f $(ENGINE_OUT)/libedge0_engine_native.dylib $(ENGINE_OUT)/libmlx.dylib
  	cp -f $(ENGINE_BUILD)/out/libedge0_engine_native.dylib $(ENGINE_OUT)/
 diff --git a/macos/crates/engine-native/src/abiface.cpp b/macos/crates/engine-native/src/abiface.cpp
-index b9423bd..1d22f97 100644
+index b9423bd..b1a3f6e 100644
 --- a/macos/crates/engine-native/src/abiface.cpp
 +++ b/macos/crates/engine-native/src/abiface.cpp
 @@ -24,6 +24,8 @@
@@ -150,7 +150,7 @@ index b9423bd..1d22f97 100644
      auto cj = nlohmann::json::parse(h->config_json, nullptr, false);
      if (!cj.is_discarded() && cj.contains("forward") && cj["forward"].is_string()) {
        const std::string fwd = cj["forward"].get<std::string>();
-@@ -441,6 +500,37 @@ E0Engine *e0_engine_create(const char *tier_id, const char *model_dir,
+@@ -441,6 +500,40 @@ E0Engine *e0_engine_create(const char *tier_id, const char *model_dir,
      delete h;
      return nullptr;
    }
@@ -164,9 +164,12 @@ index b9423bd..1d22f97 100644
 +      h->net35->configure_residency(io_cfg.value("adaptive_cache",false),
 +          io_cfg.value("profile_path",std::string{}), h->model_dir);
 +      h->net35->configure_io(packed_dir,batch,io_cfg.value("overlap_prefill",false));
++      h->net35->configure_graph_pool(io_cfg.value("graph_pool_slots",0));
 +      h->net35->memory_guard = [h] { guard_memory(h); };
 +    }
 +    if (h->net8b) {
++      if (io_cfg.value("graph_pool_slots",0))
++        throw std::invalid_argument("graph expert pool is supported only by the 35B batched decoder");
 +      h->net8b->set_budget(h->joint_budget);
 +      h->net8b->configure_residency(io_cfg.value("adaptive_cache",false),
 +          io_cfg.value("profile_path",std::string{}), h->model_dir);
@@ -188,7 +191,7 @@ index b9423bd..1d22f97 100644
    return pool_new(g_engines, h);
  }
  
-@@ -530,6 +620,12 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
+@@ -530,6 +623,12 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
      if (hit.snapshot) {
        try {
          auto snap = std::static_pointer_cast<CachedState35>(hit.snapshot);
@@ -201,7 +204,7 @@ index b9423bd..1d22f97 100644
          restore_state35(*h->st35, snap->state);
          cached_tokens = hit.matched_tokens;
          prefill_prompt.assign(prompt.begin() + static_cast<std::ptrdiff_t>(cached_tokens), prompt.end());
-@@ -553,8 +649,7 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
+@@ -553,8 +652,7 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
      }
      ns->set_on_prefill([h](const std::vector<int32_t> &full, const std::vector<float> &logits) {
        try {
@@ -211,7 +214,7 @@ index b9423bd..1d22f97 100644
        } catch (const std::exception &e) {
          h->last_error = std::string("{\"error\":\"E-INTERNAL\",\"message\":\"") +
                          esc(e.what()) + "\"}";
-@@ -562,8 +657,7 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
+@@ -562,8 +660,7 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
      });
      ns->set_on_complete([h](const std::vector<int32_t> &full, const std::vector<float> &logits) {
        try {
@@ -221,7 +224,7 @@ index b9423bd..1d22f97 100644
        } catch (const std::exception &e) {
          h->last_error = std::string("{\"error\":\"E-INTERNAL\",\"message\":\"") +
                          esc(e.what()) + "\"}";
-@@ -574,6 +668,12 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
+@@ -574,6 +671,12 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
      if (hit.snapshot) {
        try {
          auto snap = std::static_pointer_cast<CachedState8>(hit.snapshot);
@@ -234,7 +237,7 @@ index b9423bd..1d22f97 100644
          restore_state8(*h->st8b, snap->state);
          cached_tokens = hit.matched_tokens;
          prefill_prompt.assign(prompt.begin() + static_cast<std::ptrdiff_t>(cached_tokens), prompt.end());
-@@ -597,8 +697,7 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
+@@ -597,8 +700,7 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
      }
      ns->set_on_prefill([h](const std::vector<int32_t> &full, const std::vector<float> &logits) {
        try {
@@ -244,7 +247,7 @@ index b9423bd..1d22f97 100644
        } catch (const std::exception &e) {
          h->last_error = std::string("{\"error\":\"E-INTERNAL\",\"message\":\"") +
                          esc(e.what()) + "\"}";
-@@ -606,14 +705,36 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
+@@ -606,14 +708,36 @@ E0Stream *e0_generate_begin(E0Engine *h, const int32_t *prompt_tokens, uint32_t
      });
      ns->set_on_complete([h](const std::vector<int32_t> &full, const std::vector<float> &logits) {
        try {
@@ -283,7 +286,7 @@ index b9423bd..1d22f97 100644
    h->prefix_cache->set_last_prefill_tokens(prompt_len - cached_tokens);
    if (h->active) h->active->seal();
    h->active = ns;
-@@ -641,7 +762,13 @@ E0Status e0_next(E0Engine *h, E0Stream *stream, E0TokenOut *out) {
+@@ -641,7 +765,13 @@ E0Status e0_next(E0Engine *h, E0Stream *stream, E0TokenOut *out) {
      out->flags = 0;
    }
    int32_t tok = 0;
@@ -298,7 +301,7 @@ index b9423bd..1d22f97 100644
    if (got) {
      if (out) out->token = tok;
      return E0_NOTIFIED;
-@@ -655,9 +782,10 @@ E0Status e0_next(E0Engine *h, E0Stream *stream, E0TokenOut *out) {
+@@ -655,9 +785,10 @@ E0Status e0_next(E0Engine *h, E0Stream *stream, E0TokenOut *out) {
        st->owner()->has_recs = true;
        if (errored) {
          st->owner()->last_error =
@@ -311,7 +314,7 @@ index b9423bd..1d22f97 100644
        }
      }
    }
-@@ -714,8 +842,24 @@ E0Status e0_stats(E0Engine *h, char *buf, size_t buf_len, size_t *written) {
+@@ -714,8 +845,36 @@ E0Status e0_stats(E0Engine *h, char *buf, size_t buf_len, size_t *written) {
                         ",\"last_cached_tokens\":" + std::to_string(pc.last_cached_tokens) +
                         ",\"last_prefill_tokens\":" + std::to_string(pc.last_prefill_tokens) +
                         ",\"last_reason\":\"" + esc(pc.last_reason) + "\"}";
@@ -326,6 +329,18 @@ index b9423bd..1d22f97 100644
 +      {"enabled",c.residency.enabled},{"observations",c.residency.observations},
 +      {"adaptive_evictions",c.residency.adaptive_evictions},
 +      {"loaded_entries",c.residency.loaded}}).dump();
++  nlohmann::json graph={{"enabled",false}};
++  if (h->net35 && h->net35->graph_pool()) {
++    const auto *pool=h->net35->graph_pool();
++    const auto g=pool->metrics(); const auto b=pool->budget_metrics();
++    graph={{"enabled",true},{"slots",pool->slots()},
++        {"decisions",g.decisions},{"requested",g.requested},{"fills",g.fills},
++        {"hit_steps",g.hit_steps},{"mailbox_syncs",g.mailbox_syncs},
++        {"fill_batches",g.fill_batches},{"decision_wait_ns",g.decision_wait_ns},
++        {"fill_wait_ns",g.fill_wait_ns},{"budget_failures",g.budget_failures},
++        {"reserved_live_bytes",b.live},{"reserved_peak_bytes",b.peak},{"reserved_limit_bytes",b.limit}};
++  }
++  const std::string graph_stats=",\"graph_expert_pool\":"+graph.dump();
 +  const std::string joint = ",\"joint_budget\":" + nlohmann::json({
 +      {"managed_limit_bytes", jm.limit}, {"managed_live_bytes", jm.live},
 +      {"managed_peak_bytes", jm.peak}, {"rejections", jm.rejected},
@@ -333,7 +348,7 @@ index b9423bd..1d22f97 100644
 +      {"os_enforced", false}}).dump();
    std::string json =
 -      route + diag + prefix + ",\"loaded_experts\":" + std::to_string(c.loads) +
-+      route + diag + prefix + joint + io + residency + ",\"loaded_experts\":" + std::to_string(c.loads) +
++      route + diag + prefix + joint + io + residency + graph_stats + ",\"loaded_experts\":" + std::to_string(c.loads) +
        ",\"cache_hits\":" + std::to_string(c.hits) +
        ",\"cache_misses\":" + std::to_string(c.misses) +
        ",\"cache_evictions\":" + std::to_string(c.evictions) +
@@ -1050,6 +1065,226 @@ index 337f1fa..636e96b 100644
    size_t generated_ = 0;
    bool emitted_ = false;
    bool cancelled_ = false;
+diff --git a/macos/crates/engine-native/src/graph_expert_pool.hpp b/macos/crates/engine-native/src/graph_expert_pool.hpp
+new file mode 100644
+index 0000000..fe37f87
+--- /dev/null
++++ b/macos/crates/engine-native/src/graph_expert_pool.hpp
+@@ -0,0 +1,150 @@
++#pragma once
++#include <chrono>
++#include <map>
++#include <memory>
++#include <stdexcept>
++#include <vector>
++#include "expertio.hpp"
++#include "fwd_common.hpp"
++#include "graph_lru_kernel.hpp"
++
++namespace e0n {
++// SSD-backed adaptation: decisions/remapping are GPU graph operations, but a
++// small mailbox read is necessary to schedule OS file I/O. Not GPU-direct SSD.
++class GraphExpertPool {
++ public:
++  struct Generation {
++    // Reservations outlive arrays. Old generations remain leased until the
++    // consuming decode graph completes; fills never mutate their storage.
++    std::shared_ptr<JointBudget::Lease> joint_lease, pool_lease;
++    std::vector<mx::array> weights;
++  };
++  struct Result {
++    std::shared_ptr<Generation> generation;
++    mx::array slots;
++  };
++  struct Metrics {
++    uint64_t decisions=0, requested=0, fills=0, hit_steps=0, mailbox_syncs=0;
++    uint64_t fill_batches=0, decision_wait_ns=0, fill_wait_ns=0, budget_failures=0;
++  };
++  GraphExpertPool(int experts, int k, int slots, std::shared_ptr<JointBudget> joint)
++      : E_(experts), K_(k), S_(slots), joint_(std::move(joint)),
++        cap_(std::make_shared<JointBudget>(256ull << 20)) {
++    if (!joint_ || K_ <= 0 || S_ < K_ || S_ > 32 || S_ > E_)
++      throw std::invalid_argument("graph pool requires top-k <= slots <= min(32, experts)");
++    decide_ = mx::fast::metal_kernel("edge0_graph_lru", {"state", "ids"},
++                                    {"next_state", "slots", "mailbox"}, graph_lru_source);
++  }
++  void clear() { layers_.clear(); }
++  Metrics metrics() const { return metrics_; }
++  JointBudget::Metrics budget_metrics() const { return cap_->metrics(); }
++  int slots() const { return S_; }
++
++  Result get(int li, const mx::array &ids, ExpertIo &io) {
++    if (ids.size() != static_cast<size_t>(K_)) throw std::runtime_error("graph pool route shape");
++    auto &layer = layers_[li];
++    if (!layer.initialized) {
++      std::vector<int32_t> initial(2*S_, -1);
++      for (int s=0; s<S_; ++s) initial[S_+s]=s;
++      layer.state=mx::array(initial.begin(), mkshape({2*S_}), mx::int32);
++      layer.initialized=true;
++    }
++    auto began=std::chrono::steady_clock::now();
++    auto planned=decide_({layer.state,mx::reshape(mx::astype(ids,mx::int32),mkshape({K_}))},
++        {mkshape({2*S_}),mkshape({K_}),mkshape({2+2*K_})},
++        {mx::int32,mx::int32,mx::int32}, {1,1,1},{1,1,1},
++        {{"E",E_},{"K",K_},{"S",S_}},std::nullopt,false,{});
++    auto mailbox=mx::copy(planned[2],mx::default_stream(mx::Device::cpu));
++    mx::eval(mailbox);
++    exec_counters().host_syncs.fetch_add(1,std::memory_order_relaxed);
++    ++metrics_.mailbox_syncs;
++    metrics_.decision_wait_ns+=elapsed(began);
++    const int32_t *mb=mailbox.data<int32_t>();
++    if (mb[0] || mb[1]<0 || mb[1]>K_) throw std::runtime_error("graph pool invalid decision");
++    const int count=mb[1];
++    ++metrics_.decisions; metrics_.requested+=K_;
++    if (count) {
++      began=std::chrono::steady_clock::now();
++      std::vector<int64_t> misses;
++      std::vector<int32_t> positions;
++      for (int m=0; m<count; ++m) {
++        if (mb[2+m]<0 || mb[2+m]>=E_ || mb[2+K_+m]<0 || mb[2+K_+m]>=S_)
++          throw std::runtime_error("graph pool invalid fill address");
++        for (int n=0; n<m; ++n)
++          if (mb[2+n]==mb[2+m] || mb[2+K_+n]==mb[2+K_+m])
++            throw std::runtime_error("graph pool duplicate fill address");
++        misses.push_back(mb[2+m]); positions.push_back(mb[2+K_+m]);
++      }
++      // Existing loader deduplicates requests and consumes prefetch/inflight
++      // results. Both original shards and packed sidecars work unchanged.
++      auto bundles=io.get_bundles(li,misses);
++      if (bundles.size()!=misses.size()) throw std::runtime_error("graph pool SSD fill missing");
++      uint64_t row_bytes=0;
++      for (int p=0; p<9; ++p) row_bytes+=bundles.at(misses[0])->at(p).nbytes();
++      // Conservative reservation: full new pool plus a full pool of temporary
++      // fill workspace. Old pool and source bundles have separate live leases.
++      uint64_t charge=2*row_bytes*S_ + uint64_t(4*(4*S_+4*K_+4));
++      auto next=std::make_shared<Generation>();
++      next->pool_lease=cap_->try_acquire(charge);
++      if (next->pool_lease) next->joint_lease=joint_->try_acquire(charge);
++      if (!next->pool_lease || !next->joint_lease) {
++        ++metrics_.budget_failures;
++        throw std::runtime_error("graph pool admission failed; keep limits and reduce graph_pool_slots");
++      }
++      auto pos=mx::array(positions.begin(),mkshape({count}),mx::int32);
++      for (int p=0; p<9; ++p) {
++        const auto &sample=bundles.at(misses[0])->at(p);
++        if (sample.ndim()!=2) throw std::runtime_error("graph pool requires matrix regions");
++        std::vector<mx::array> updates;
++        for (auto e:misses) {
++          const auto &v=bundles.at(e)->at(p);
++          if (v.shape()!=sample.shape() || v.dtype()!=sample.dtype())
++            throw std::runtime_error("graph pool inconsistent region");
++          updates.push_back(v);
++        }
++        if (layer.generation) {
++          const auto &old=layer.generation->weights.at(p);
++          next->weights.push_back(mx::scatter(old,{pos},
++              mx::reshape(mx::stack(updates),mkshape({count,1,sample.shape(0),sample.shape(1)})),{0}));
++        } else {
++          // First fill initializes unused slots; no uninitialized data can be
++          // read even if a later graph is rejected. No expert preloading.
++          auto zero=mx::zeros(sample.shape(),sample.dtype());
++          std::vector<mx::array> rows(S_,zero);
++          for (int m=0; m<count; ++m) rows.at(positions[m])=updates[m];
++          next->weights.push_back(mx::stack(rows));
++        }
++      }
++      // Finish fills before publishing the new state. Also bounds lazy-graph
++      // retention and keeps source bundle leases alive through materialization.
++      auto evaluated=next->weights;
++      evaluated.push_back(planned[0]); evaluated.push_back(planned[1]);
++      mx::eval(evaluated);
++      exec_counters().host_syncs.fetch_add(1,std::memory_order_relaxed);
++      layer.generation=std::move(next);
++      metrics_.fills+=count; ++metrics_.fill_batches;
++      metrics_.fill_wait_ns+=elapsed(began);
++    } else {
++      ++metrics_.hit_steps;
++    }
++    if (!layer.generation) throw std::runtime_error("graph pool has no resident weights");
++    layer.state=planned[0];
++    return {layer.generation,mx::reshape(planned[1],ids.shape())};
++  }
++ private:
++  struct Layer {
++    bool initialized=false;
++    mx::array state{0};
++    std::shared_ptr<Generation> generation;
++  };
++  static uint64_t elapsed(std::chrono::steady_clock::time_point start) {
++    return std::chrono::duration_cast<std::chrono::nanoseconds>(
++        std::chrono::steady_clock::now()-start).count();
++  }
++  int E_,K_,S_;
++  std::shared_ptr<JointBudget> joint_,cap_;
++  mx::fast::CustomKernelFunction decide_;
++  std::map<int,Layer> layers_;
++  Metrics metrics_;
++};
++} // namespace e0n
+diff --git a/macos/crates/engine-native/src/graph_lru_kernel.hpp b/macos/crates/engine-native/src/graph_lru_kernel.hpp
+new file mode 100644
+index 0000000..bdf9942
+--- /dev/null
++++ b/macos/crates/engine-native/src/graph_lru_kernel.hpp
+@@ -0,0 +1,58 @@
++#pragma once
++namespace e0n {
++// Original implementation inspired by llama.cpp #29949. Same source body is
++// compiled as C++ in portable tests; Metal compilation still requires a Mac.
++// One GPU thread; integer-only deterministic planning; no in-place mutation.
++// State: slot owners[S], MRU->LRU slot permutation[S].
++// Mailbox: error, miss count, missing expert ids[K], destination slots[K].
++inline constexpr const char *graph_lru_source = R"lru(
++if (thread_position_in_grid.x != 0) return;
++for (int i = 0; i < 2*S; ++i) next_state[i] = state[i];
++for (int i = 0; i < 2+2*K; ++i) mailbox[i] = -1;
++mailbox[0] = 0;
++mailbox[1] = 0;
++for (int j = 0; j < K; ++j) slots[j] = -1;
++// Validate before using any value as an array index. Fail closed on corruption.
++for (int s = 0; s < S; ++s) {
++    if (state[s] < -1 || state[s] >= E || state[S+s] < 0 || state[S+s] >= S) {
++        mailbox[0] = 1; return;
++    }
++    for (int t = 0; t < s; ++t) {
++        if (state[S+s] == state[S+t] || (state[s] >= 0 && state[s] == state[t])) {
++            mailbox[0] = 1; return;
++        }
++    }
++}
++for (int j = 0; j < K; ++j) {
++    if (ids[j] < 0 || ids[j] >= E) { mailbox[0] = 2; return; }
++}
++for (int j = 0; j < K; ++j) {
++    int slot = -1;
++    for (int s = 0; s < S; ++s) if (next_state[s] == ids[j]) slot = s;
++    if (slot < 0) {
++        for (int s = 0; s < S; ++s) if (slot < 0 && next_state[s] == -1) slot = s;
++        if (slot < 0) {
++            // Protect ALL requested experts, including hits later in the route.
++            // A miss must never overwrite an expert used by this same matmul.
++            for (int r = S-1; r >= 0 && slot < 0; --r) {
++                int candidate = next_state[S+r];
++                bool protected_slot = false;
++                for (int t = 0; t < K; ++t)
++                    if (next_state[candidate] == ids[t]) protected_slot = true;
++                if (!protected_slot) slot = candidate;
++            }
++        }
++        if (slot < 0) { mailbox[0] = 3; return; }
++        int m = mailbox[1]++;
++        mailbox[2+m] = ids[j];
++        mailbox[2+K+m] = slot;
++        next_state[slot] = ids[j];
++    }
++    slots[j] = slot;
++    int rank = 0;
++    while (rank < S && next_state[S+rank] != slot) ++rank;
++    for (int r = rank; r > 0; --r) next_state[S+r] = next_state[S+r-1];
++    next_state[S] = slot;
++}
++)lru";
++} // namespace e0n
 diff --git a/macos/crates/engine-native/src/joint_budget.hpp b/macos/crates/engine-native/src/joint_budget.hpp
 new file mode 100644
 index 0000000..defd933
@@ -1134,7 +1369,7 @@ index 0000000..defd933
 +};
 +} // namespace e0n
 diff --git a/macos/crates/engine-native/src/net35.cpp b/macos/crates/engine-native/src/net35.cpp
-index a4e499c..eb4760b 100644
+index a4e499c..bcc2f75 100644
 --- a/macos/crates/engine-native/src/net35.cpp
 +++ b/macos/crates/engine-native/src/net35.cpp
 @@ -429,6 +429,7 @@ void Net35::reset_state(State35 &st) const {
@@ -1145,15 +1380,48 @@ index a4e499c..eb4760b 100644
    const int64_t T = x.shape(1);
    const auto dt = x.dtype();
    const int64_t keyd = hk_ * dk_, vald = hv_ * dv_;
-@@ -611,6 +612,7 @@ bool Net35::layer_fwd(Layer &L, int li, mx::array &x, State35 &st, bool decode,
+@@ -559,6 +560,25 @@ bool Net35::layer_fwd(Layer &L, int li, mx::array &x, State35 &st, bool decode,
+       const int gsh = static_cast<int>(H_ / 64), gsf = static_cast<int>(moe_ffn_ / 64);
+       auto gl = L.gate_q.apply(m_in);
+       select_softmax_gpu(gl, E, k, reg_.norm_topk_prob, idx, w);
++      if (graph_pool_ && !consumer) {
++        auto resident=graph_pool_->get(li,idx,*io_);
++        std::vector<mx::array> args{m_in};
++        for (auto &a:resident.generation->weights) args.push_back(a);
++        args.push_back(resident.slots);
++        routed=moe_math_(args)[0];
++        step_pool_leases_.push_back(std::move(resident.generation));
++        // Route telemetry/heat updates are deferred to the token boundary.
++        // GPU routing and mixing retain original order, dtype and weights.
++        deferred_routes_.push_back({li,
++            mx::copy(mx::add(mx::astype(idx,mx::int32),mx::array(0,mx::int32)),mx::default_stream(mx::Device::cpu)),
++            mx::copy(mx::add(mx::astype(w,mx::float32),mx::array(0.f)),mx::default_stream(mx::Device::cpu))});
++        rec.predicted=false;
++        auto &cx=exec_counters();
++        cx.qmm_calls.fetch_add(3,std::memory_order_relaxed);
++        cx.qmm_experts.fetch_add(3*k,std::memory_order_relaxed);
++        cx.qmm_weight_bytes.fetch_add(static_cast<uint64_t>(k)*
++            (2*(F*(H_/8)*4+2*F*gsh*2)+(H_*(F/8)*4+2*H_*gsf*2)),std::memory_order_relaxed);
++      } else {
+       mx::eval(idx, w);
+       exec_counters().host_syncs.fetch_add(1, std::memory_order_relaxed);
+       auto idxh = mx::copy(mx::astype(idx, mx::int32), mx::default_stream(mx::Device::cpu));
+@@ -605,12 +625,14 @@ bool Net35::layer_fwd(Layer &L, int li, mx::array &x, State35 &st, bool decode,
+           if (flat[j] == e) s = wp[j];
+         rec.sel.scores.push_back(s);
+       }
++      } // legacy host-decided path
+     }
+     if (owner) {
+       m_in_cache_[static_cast<size_t>(li)] = m_in;
        oh_cur_[static_cast<size_t>(li)] = topk_onehot(idx, E);
      }
      // mix+shared(install.py:190-194):(y*scores[...,None]).sum(-2) + sigmoid(egate(x))*shared(x)
-+    io_->observe_decode(li, rec.sel.inds);
++    if (!rec.sel.inds.empty()) io_->observe_decode(li, rec.sel.inds);
      auto out = mx::sum(routed * mx::expand_dims(w, -1), std::vector<int>{-2}, false);
      auto shg = e0n::lora::apply_lora(lo_.get(), L.sh_gate, m_in, li, e0n::lora::S35_SH_GATE);
      auto shu = e0n::lora::apply_lora(lo_.get(), L.sh_up, m_in, li, e0n::lora::S35_SH_UP);
-@@ -756,6 +758,7 @@ bool Net35::layer_fwd(Layer &L, int li, mx::array &x, State35 &st, bool decode,
+@@ -756,6 +778,7 @@ bool Net35::layer_fwd(Layer &L, int li, mx::array &x, State35 &st, bool decode,
    rec.layer = li;
    rec.predicted = predicted;
    rec.sel = sels[static_cast<size_t>(T - 1)];
@@ -1161,7 +1429,7 @@ index a4e499c..eb4760b 100644
    std::vector<float> last_row(mhost.begin() + (T - 1) * H_, mhost.end());
    st.pr.capture(li, std::move(last_row), rec.sel.inds);
  
-@@ -1027,6 +1030,7 @@ bool Net35::prefill_batched_(const std::vector<int32_t> &tokens, State35 &st,
+@@ -1027,6 +1050,7 @@ bool Net35::prefill_batched_(const std::vector<int32_t> &tokens, State35 &st,
          return false;
        st.position += n;  // base.py:83 self.pos += len(chunk)
        if (!stage_all_gpu(st, err, nullptr)) return false;
@@ -1169,7 +1437,7 @@ index a4e499c..eb4760b 100644
      }
      prefill_end_(st);
      logits_last = std::move(lg);
-@@ -1049,6 +1053,7 @@ bool Net35::forward_chunk_batched_(const int32_t *tok, int64_t T, State35 &st,
+@@ -1049,6 +1073,7 @@ bool Net35::forward_chunk_batched_(const int32_t *tok, int64_t T, State35 &st,
    const bool cb = T > 1 && reg_.prefill_hot > 0 && !prefill_ondemand();
    std::vector<RouteRec> local_recs;
    for (size_t li = 0; li < layers_.size(); li++) {
@@ -1177,7 +1445,7 @@ index a4e499c..eb4760b 100644
      if (cb) prefill_before_layer(static_cast<int>(li));  // qwen3_5.py:285-287 before_layer_cb
      RouteRec rec;
      if (!layer_fwd(layers_[li], static_cast<int>(li), x, st, false, rec, nullptr, err))
-@@ -1064,6 +1069,10 @@ bool Net35::forward_chunk_batched_(const int32_t *tok, int64_t T, State35 &st,
+@@ -1064,6 +1089,10 @@ bool Net35::forward_chunk_batched_(const int32_t *tok, int64_t T, State35 &st,
      }
      local_recs.push_back(std::move(rec));
    }
@@ -1188,7 +1456,7 @@ index a4e499c..eb4760b 100644
    mx::array xs = e0_rms_norm(
        x, mx::astype(wrap_f32(final_norm_w_, mkshape({H_})), mx::bfloat16), eps_);
    mx::array lastrow =
-@@ -1141,6 +1150,10 @@ bool Net35::moe_hot_branch_(int li, const mx::array &m_in, int64_t T,
+@@ -1141,6 +1170,10 @@ bool Net35::moe_hot_branch_(int li, const mx::array &m_in, int64_t T,
                            "affine", true);
    auto out = mx::take(z, inv_order, 0);                              // _scatter_unsort(1162)
    if (!miss_rows.empty()) {
@@ -1199,7 +1467,7 @@ index a4e499c..eb4760b 100644
      std::map<int64_t, std::vector<int64_t>> by_expert;
      for (auto i : miss_rows) by_expert[flat[i]].push_back(i);
      auto &cx = exec_counters();
-@@ -1171,6 +1184,13 @@ bool Net35::moe_hot_branch_(int li, const mx::array &m_in, int64_t T,
+@@ -1171,6 +1204,13 @@ bool Net35::moe_hot_branch_(int li, const mx::array &m_in, int64_t T,
        auto farr = mx::array(fpos.begin(), mkshape({m}), mx::int32);
        out = mx::scatter_add(
            out, {farr}, mx::reshape(ze, mkshape({m, 1, 1, H_})), {0});
@@ -1213,19 +1481,78 @@ index a4e499c..eb4760b 100644
      }
    }
    routed = mx::reshape(out, mkshape({1, T, k, H_}));
+@@ -1186,10 +1226,30 @@ bool Net35::moe_hot_branch_(int li, const mx::array &m_in, int64_t T,
+   return true;
+ }
+ 
++void Net35::finish_graph_routes(std::vector<RouteRec> &recs) {
++  if (deferred_routes_.empty()) return;
++  std::vector<mx::array> values;
++  for (auto &r:deferred_routes_) { values.push_back(r.ids); values.push_back(r.weights); }
++  mx::eval(values);
++  exec_counters().host_syncs.fetch_add(1,std::memory_order_relaxed);
++  for (auto &r:deferred_routes_) {
++    auto &rec=recs.at(r.layer);
++    const int32_t *ids=r.ids.data<int32_t>();
++    const float *weights=r.weights.data<float>();
++    std::map<int64_t,double> ordered;
++    for (int j=0; j<reg_.top_k; ++j) ordered[ids[j]]=weights[j];
++    for (auto [id,weight]:ordered) { rec.sel.inds.push_back(id); rec.sel.scores.push_back(weight); }
++    io_->observe_decode(r.layer,rec.sel.inds);
++  }
++  deferred_routes_.clear();
++}
++
+ bool Net35::step(int32_t token, State35 &st, std::vector<float> &logits,
+                  std::vector<RouteRec> &recs, std::string &err, DecodeProbe *probe) {
+   try {
+     step_bundles_.clear();
++    deferred_routes_.clear();
++    step_pool_leases_.clear();
+     std::vector<float> xh;
+     if (!embed_lookup(embed_, {token}, H_, V_, xh, err)) return false;
+     mx::array x = mx::astype(mx::reshape(wrap_f32(xh, mkshape({1, 1, H_})), mkshape({1, 1, H_})),
+@@ -1204,6 +1264,10 @@ bool Net35::step(int32_t token, State35 &st, std::vector<float> &logits,
+     mx::array xs = e0_rms_norm(
+         x, mx::astype(wrap_f32(final_norm_w_, mkshape({H_})), mx::bfloat16), eps_);
+     if (!to_host32(lm_head_.apply(mx::reshape(xs, mkshape({1, H_}))), logits, err)) return false;
++    finish_graph_routes(recs);
++    // Logits and deferred routing have completed. Old pool generations can
++    // now release their reservations without racing an in-flight matmul.
++    step_pool_leases_.clear();
+     st.position += 1;
+     if (exec_mode() == ExecMode::Batched) {
+       if (!stage_all_gpu(st, err, probe)) return false;
 diff --git a/macos/crates/engine-native/src/net35.hpp b/macos/crates/engine-native/src/net35.hpp
-index fee1cf2..2c93ac7 100644
+index fee1cf2..2f31801 100644
 --- a/macos/crates/engine-native/src/net35.hpp
 +++ b/macos/crates/engine-native/src/net35.hpp
-@@ -61,6 +61,16 @@ class Net35 {
+@@ -8,6 +8,7 @@
+ #include <mlx/mlx.h>
+ 
+ #include "expertio.hpp"
++#include "graph_expert_pool.hpp"
+ #include "expertmap.hpp"
+ #include "fwd_common.hpp"
+ #include "hotstack.hpp"
+@@ -61,6 +62,25 @@ class Net35 {
    uint64_t dense_resident_bytes() const { return dense_bytes_; }
    void prefetch(const Step &plan);
    ExpertIo::Metrics io_metrics() const { return io_->snapshot(); }
-+  void set_budget(std::shared_ptr<JointBudget> budget) { io_->set_budget(std::move(budget)); }
++  void set_budget(std::shared_ptr<JointBudget> budget) {
++    joint_budget_ = budget; io_->set_budget(std::move(budget));
++  }
++  void configure_graph_pool(int slots) {
++    if (slots && exec_mode()!=ExecMode::Batched)
++      throw std::invalid_argument("graph pool requires EDGE0_EXEC=batched");
++    if (slots) graph_pool_ = std::make_unique<GraphExpertPool>(
++        static_cast<int>(reg_.num_experts), static_cast<int>(reg_.top_k), slots, joint_budget_);
++  }
++  const GraphExpertPool *graph_pool() const { return graph_pool_.get(); }
 +  void configure_residency(bool adaptive, const std::string &path, const std::string &model_dir) {
 +    io_->configure_residency(adaptive,path,model_dir);
 +  }
-+  void drop_cached() { io_->drop_cached(); }
++  void drop_cached() { io_->drop_cached(); if (graph_pool_) graph_pool_->clear(); }
 +  void configure_io(const std::string &dir, bool batch, bool overlap = false) {
 +    io_->configure_io(dir,batch); overlap_prefill_ = overlap;
 +  }
@@ -1234,11 +1561,17 @@ index fee1cf2..2c93ac7 100644
    void shard_warm(const std::vector<std::string> &shard_names, bool seq);
  
    void init_state(State35 &st) const;
-@@ -99,6 +109,7 @@ class Net35 {
+@@ -99,6 +119,13 @@ class Net35 {
    mutable std::shared_ptr<const ModelFiles> files_;
    std::shared_ptr<const ExpertMap> emap_;
    std::unique_ptr<ExpertIo> io_;
 +  bool overlap_prefill_ = false;
++  std::shared_ptr<JointBudget> joint_budget_;
++  std::unique_ptr<GraphExpertPool> graph_pool_;
++  struct DeferredRoute { int layer; mx::array ids, weights; };
++  std::vector<DeferredRoute> deferred_routes_;
++  std::vector<std::shared_ptr<GraphExpertPool::Generation>> step_pool_leases_;
++  void finish_graph_routes(std::vector<RouteRec> &recs);
    TierRouting reg_;
    std::vector<Layer> layers_;
    std::unique_ptr<Prerouter> pr_;
